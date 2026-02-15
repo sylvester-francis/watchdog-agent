@@ -32,28 +32,28 @@ WatchDog Agent is a lightweight Go binary that runs inside your network and perf
 
 ## How It Works
 
+```mermaid
+graph TB
+    subgraph Net["Customer Network"]
+        subgraph Agent["watchdog-agent"]
+            HTTP["HTTP Checker"]
+            TCP["TCP Checker"]
+            Ping["Ping Checker"]
+        end
+        T1["Internal API"]
+        T2["Database:5432"]
+        T3["Host"]
+    end
+
+    Hub["WatchDog Hub<br/>(cloud / your server)"]
+
+    HTTP --> T1
+    TCP --> T2
+    Ping --> T3
+    Agent -- "WebSocket<br/>(outbound only, port 443)" --> Hub
 ```
-                    Customer Network
-                    +-----------------------------------------+
-                    |                                         |
-                    |  watchdog-agent                         |
-                    |  +-----------------------------------+  |
-                    |  | HTTP Checker | TCP Checker | Ping |  |
-                    |  +-----------------------------------+  |
-                    |       |              |            |      |
-                    |       v              v            v      |
-                    |  [Internal API] [Database:5432] [Host]  |
-                    |                                         |
-                    +-------|-----|------|---------------------+
-                            |     |      |
-                      WebSocket (outbound only, port 443)
-                            |     |      |
-                            v     v      v
-                    +---------------------------+
-                    |      WatchDog Hub          |
-                    |  (cloud / your server)     |
-                    +---------------------------+
-```
+
+> [View Excalidraw source](docs/diagrams/how-it-works.excalidraw)
 
 1. Agent connects to the Hub via WebSocket and authenticates with an API key
 2. Hub pushes monitoring tasks (targets, intervals, timeouts)
