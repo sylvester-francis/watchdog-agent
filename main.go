@@ -135,6 +135,10 @@ func (a *Agent) Run(ctx context.Context) error {
 				a.logger.Error("connection error", slog.String("error", err.Error()))
 			}
 
+			// Stop all tasks before reconnecting so stale goroutines
+			// don't send heartbeats on the dead connection.
+			a.stopAllTasks()
+
 			// Wait before reconnecting
 			select {
 			case <-ctx.Done():
@@ -151,6 +155,7 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create connection: %w", err)
 	}
+	defer conn.Close()
 	a.conn = conn
 
 	// Authenticate
