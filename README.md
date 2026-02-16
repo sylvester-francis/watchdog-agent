@@ -9,6 +9,8 @@
 ```
 **Lightweight Monitoring Agent for Private Networks**
 
+> Part of [WatchDog](https://github.com/sylvester-francis/watchdog) — live at [usewatchdog.dev](https://usewatchdog.dev)
+
 ![Go](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
 ![Docker](https://img.shields.io/badge/Docker-Scratch--based-2496ED?logo=docker&logoColor=white)
