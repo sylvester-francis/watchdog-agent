@@ -13,6 +13,12 @@ import (
 	"github.com/sylvester-francis/watchdog-proto/protocol"
 )
 
+// Connection timing constants.
+const (
+	readWait  = 90 * time.Second
+	pingEvery = 30 * time.Second
+)
+
 // Connection errors.
 var (
 	ErrAuthFailed     = errors.New("authentication failed")
@@ -47,6 +53,16 @@ func NewConnection(url, apiKey, version string, logger *slog.Logger) (*Connectio
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
+
+	// Reset read deadline when the hub sends us a WebSocket ping.
+	// Without this, the read deadline set in readMessage() expires because
+	// ping control frames don't unblock ReadMessage().
+	conn.SetPingHandler(func(appData string) error {
+		if err := conn.SetReadDeadline(time.Now().Add(readWait)); err != nil {
+			return err
+		}
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(5*time.Second))
+	})
 
 	return &Connection{
 		url:     url,
@@ -144,7 +160,7 @@ func (c *Connection) Run(ctx context.Context, handler func(*protocol.Message)) e
 }
 
 func (c *Connection) writePump(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(pingEvery)
 	defer ticker.Stop()
 
 	for {
@@ -223,7 +239,7 @@ func (c *Connection) writeMessage(msg *protocol.Message) error {
 }
 
 func (c *Connection) readMessage() (*protocol.Message, error) {
-	if err := c.conn.SetReadDeadline(time.Now().Add(90 * time.Second)); err != nil {
+	if err := c.conn.SetReadDeadline(time.Now().Add(readWait)); err != nil {
 		return nil, err
 	}
 
