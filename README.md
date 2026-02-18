@@ -38,7 +38,7 @@ This is part of the [WatchDog](https://github.com/sylvester-francis/watchdog) mo
 
 ```mermaid
 graph LR
-    subgraph net["Customer Network"]
+    subgraph net["Private Network"]
         subgraph agent["watchdog-agent"]
             HTTP
             TCP
