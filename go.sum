@@ -1,4 +1,4 @@
 github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
-github.com/sylvester-francis/watchdog-proto v0.3.0 h1:9e62EAmd4td7/5xtxLNxuu6n5Qq6bIC9Yh5QA8bJKO4=
-github.com/sylvester-francis/watchdog-proto v0.3.0/go.mod h1:7Q6YKuGUQI/scuhisv4C4dlsTiGeH4s4O9ntP2US4ZE=
+github.com/sylvester-francis/watchdog-proto v0.3.1-0.20260220194312-4629b7b26d29 h1:KksDGFanzGMTjG/+GcEtqmfh7yHLJZD1H0egQfMpm7I=
+github.com/sylvester-francis/watchdog-proto v0.3.1-0.20260220194312-4629b7b26d29/go.mod h1:7Q6YKuGUQI/scuhisv4C4dlsTiGeH4s4O9ntP2US4ZE=
