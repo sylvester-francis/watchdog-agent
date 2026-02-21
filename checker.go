@@ -1,15 +1,21 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/sylvester-francis/watchdog-proto/protocol"
 )
 
@@ -100,6 +106,12 @@ func (t *Task) runCheck() {
 		status, errMsg = t.checkDNS(ctx)
 	case "tls":
 		status, errMsg, certExpiryDays, certIssuer = t.checkTLS(ctx)
+	case "docker":
+		status, errMsg = t.checkDocker(ctx)
+	case "database":
+		status, errMsg = t.checkDatabase(ctx)
+	case "system":
+		status, errMsg = t.checkSystem(ctx)
 	default:
 		status = StatusError
 		errMsg = fmt.Sprintf("unknown check type: %s", t.payload.Type)
@@ -161,6 +173,16 @@ func (t *Task) checkHTTP(ctx context.Context) (status, errMsg string) {
 
 	// Consider 2xx and 3xx as success
 	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		// Check for expected content if configured
+		if expected := t.payload.Metadata["expected_content"]; expected != "" {
+			body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB cap
+			if err != nil {
+				return StatusDown, fmt.Sprintf("failed to read body: %s", err.Error())
+			}
+			if !strings.Contains(string(body), expected) {
+				return StatusDown, "expected content not found"
+			}
+		}
 		return StatusUp, ""
 	}
 
@@ -275,6 +297,213 @@ func (t *Task) checkTLS(ctx context.Context) (status, errMsg string, certExpiryD
 	}
 
 	return StatusUp, "", certExpiryDays, certIssuer
+}
+
+// checkDocker checks if a Docker container is running via the Docker socket.
+func (t *Task) checkDocker(ctx context.Context) (status, errMsg string) {
+	containerName := t.payload.Target
+
+	// HTTP client using Unix socket
+	client := &http.Client{
+		Timeout: time.Duration(t.payload.Timeout) * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", "/var/run/docker.sock")
+			},
+		},
+	}
+
+	url := "http://localhost/containers/" + containerName + "/json"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return StatusError, fmt.Sprintf("invalid request: %s", err.Error())
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return StatusDown, fmt.Sprintf("docker socket error: %s", err.Error())
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		return StatusDown, "container not found"
+	}
+	if resp.StatusCode != 200 {
+		return StatusDown, fmt.Sprintf("docker API returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if err != nil {
+		return StatusDown, fmt.Sprintf("failed to read response: %s", err.Error())
+	}
+
+	bodyStr := string(body)
+	// Check if container is running (simple string check to avoid json dependency overhead)
+	if !strings.Contains(bodyStr, `"Running":true`) {
+		return StatusDown, "container not running"
+	}
+
+	// Check health status if present
+	if strings.Contains(bodyStr, `"Health"`) {
+		if strings.Contains(bodyStr, `"Status":"unhealthy"`) {
+			return StatusDown, "container unhealthy"
+		}
+	}
+
+	return StatusUp, ""
+}
+
+// checkDatabase routes to the appropriate DB check based on metadata["db_type"].
+func (t *Task) checkDatabase(ctx context.Context) (status, errMsg string) {
+	dbType := t.payload.Metadata["db_type"]
+	switch dbType {
+	case "postgres":
+		return t.checkPostgres(ctx)
+	case "mysql":
+		return t.checkMySQL(ctx)
+	case "redis":
+		return t.checkRedis(ctx)
+	default:
+		return StatusError, fmt.Sprintf("unsupported database type: %s", dbType)
+	}
+}
+
+func (t *Task) checkPostgres(ctx context.Context) (status, errMsg string) {
+	connStr := t.payload.Metadata["connection_string"]
+	if connStr == "" {
+		connStr = fmt.Sprintf("postgres://%s/postgres?sslmode=disable", t.payload.Target)
+	}
+
+	db, err := sql.Open("pgx", connStr)
+	if err != nil {
+		return StatusDown, fmt.Sprintf("postgres open: %s", err.Error())
+	}
+	defer db.Close()
+
+	if err := db.PingContext(ctx); err != nil {
+		return StatusDown, fmt.Sprintf("postgres ping: %s", err.Error())
+	}
+	return StatusUp, ""
+}
+
+func (t *Task) checkMySQL(ctx context.Context) (status, errMsg string) {
+	connStr := t.payload.Metadata["connection_string"]
+	if connStr == "" {
+		connStr = fmt.Sprintf("tcp(%s)/", t.payload.Target)
+	}
+
+	db, err := sql.Open("mysql", connStr)
+	if err != nil {
+		return StatusDown, fmt.Sprintf("mysql open: %s", err.Error())
+	}
+	defer db.Close()
+
+	if err := db.PingContext(ctx); err != nil {
+		return StatusDown, fmt.Sprintf("mysql ping: %s", err.Error())
+	}
+	return StatusUp, ""
+}
+
+func (t *Task) checkRedis(ctx context.Context) (status, errMsg string) {
+	target := t.payload.Target
+	if _, _, err := net.SplitHostPort(target); err != nil {
+		target = target + ":6379"
+	}
+
+	dialer := net.Dialer{Timeout: time.Duration(t.payload.Timeout) * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", target)
+	if err != nil {
+		return StatusDown, fmt.Sprintf("redis connect: %s", err.Error())
+	}
+	defer conn.Close()
+
+	if err := conn.SetDeadline(time.Now().Add(time.Duration(t.payload.Timeout) * time.Second)); err != nil {
+		return StatusDown, fmt.Sprintf("redis set deadline: %s", err.Error())
+	}
+
+	// AUTH if password is set
+	if pw := t.payload.Metadata["password"]; pw != "" {
+		authCmd := fmt.Sprintf("*2\r\n$4\r\nAUTH\r\n$%d\r\n%s\r\n", len(pw), pw)
+		if _, err := conn.Write([]byte(authCmd)); err != nil {
+			return StatusDown, fmt.Sprintf("redis auth write: %s", err.Error())
+		}
+		reader := bufio.NewReader(conn)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return StatusDown, fmt.Sprintf("redis auth read: %s", err.Error())
+		}
+		if !strings.HasPrefix(line, "+OK") {
+			return StatusDown, fmt.Sprintf("redis auth failed: %s", strings.TrimSpace(line))
+		}
+	}
+
+	// PING
+	if _, err := conn.Write([]byte("*1\r\n$4\r\nPING\r\n")); err != nil {
+		return StatusDown, fmt.Sprintf("redis ping write: %s", err.Error())
+	}
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return StatusDown, fmt.Sprintf("redis ping read: %s", err.Error())
+	}
+	if !strings.HasPrefix(line, "+PONG") {
+		return StatusDown, fmt.Sprintf("redis unexpected response: %s", strings.TrimSpace(line))
+	}
+
+	return StatusUp, ""
+}
+
+// checkSystem checks system metrics (CPU/memory/disk) against thresholds.
+func (t *Task) checkSystem(ctx context.Context) (status, errMsg string) {
+	target := t.payload.Target
+	parts := strings.SplitN(target, ":", 2)
+	if len(parts) < 2 {
+		return StatusError, "system target format: metric:threshold (e.g. cpu:90)"
+	}
+
+	metric := parts[0]
+	rest := parts[1]
+
+	var threshold float64
+	var path string
+	if metric == "disk" {
+		// format: disk:90:/path
+		diskParts := strings.SplitN(rest, ":", 2)
+		if len(diskParts) < 2 {
+			return StatusError, "disk target format: disk:threshold:/path (e.g. disk:90:/)"
+		}
+		if _, err := fmt.Sscanf(diskParts[0], "%f", &threshold); err != nil {
+			return StatusError, fmt.Sprintf("invalid threshold: %s", diskParts[0])
+		}
+		path = diskParts[1]
+	} else {
+		if _, err := fmt.Sscanf(rest, "%f", &threshold); err != nil {
+			return StatusError, fmt.Sprintf("invalid threshold: %s", rest)
+		}
+	}
+
+	var usage float64
+	var metricErr error
+
+	switch metric {
+	case "cpu":
+		usage, metricErr = getCPUUsage()
+	case "memory":
+		usage, metricErr = getMemoryUsage()
+	case "disk":
+		usage, metricErr = getDiskUsage(path)
+	default:
+		return StatusError, fmt.Sprintf("unsupported metric: %s", metric)
+	}
+
+	if metricErr != nil {
+		return StatusError, metricErr.Error()
+	}
+
+	if usage > threshold {
+		return StatusDown, fmt.Sprintf("%s usage %.1f%% exceeds threshold %.0f%%", metric, usage, threshold)
+	}
+	return StatusUp, fmt.Sprintf("%s usage %.1f%%", metric, usage)
 }
 
 // Checker provides check functions for different monitor types.
