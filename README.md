@@ -11,7 +11,7 @@
 
 > Part of [WatchDog](https://github.com/sylvester-francis/watchdog) — live at [usewatchdog.dev](https://usewatchdog.dev)
 
-![Go](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
 ![Docker](https://img.shields.io/badge/Docker-Scratch--based-2496ED?logo=docker&logoColor=white)
 ![Binary Size](https://img.shields.io/badge/Image-%3C10MB-brightgreen)
@@ -36,24 +36,25 @@ This is part of the [WatchDog](https://github.com/sylvester-francis/watchdog) mo
 
 ## How It Works
 
-```
-┌───────────────────────────┐
-│     Customer Network      │
-│                           │
-│  ┌───────────────────┐    │
-│  │  watchdog-agent   │    │       ┌──────────────────┐
-│  │  ┌──────┐ ┌─────┐ │    │       │  WatchDog Hub    │
-│  │  │ HTTP │ │ TCP │ │────WebSocket──▶  (your server   │
-│  │  └──┬───┘ └──┬──┘ │    │       │   or cloud)      │
-│  │  ┌──┴───┐ ┌──┴──┐ │    │       └──────────────────┘
-│  │  │ Ping │ │ DNS │ │    │
-│  │  └──────┘ └─────┘ │    │
-│  └────────┬───────────┘    │
-│     ┌─────▼─────┐          │
-│     │ Internal  │          │
-│     │ Services  │          │
-│     └───────────┘          │
-└───────────────────────────┘
+```mermaid
+graph LR
+    subgraph net["Customer Network"]
+        subgraph agent["watchdog-agent"]
+            HTTP
+            TCP
+            Ping
+            DNS
+            TLS
+        end
+        Services["Internal Services"]
+        agent --> Services
+    end
+
+    subgraph hub["WatchDog Hub"]
+        Server["Your server or cloud"]
+    end
+
+    agent -- "WebSocket (outbound)" --> hub
 ```
 
 1. Agent connects to the Hub via WebSocket and authenticates with an API key
@@ -264,7 +265,7 @@ launchctl load ~/Library/LaunchAgents/com.watchdog.agent.plist
 watchdog-agent/
     main.go              # Entrypoint, agent lifecycle, reconnection loop
     connection.go        # WebSocket connection management, auth handshake
-    checker.go           # HTTP, TCP, Ping, and DNS check implementations
+    checker.go           # HTTP, TCP, Ping, DNS, and TLS check implementations
     Dockerfile           # Multi-stage build (scratch-based, <10 MB)
     scripts/
         build-agent.sh       # Cross-platform release build
