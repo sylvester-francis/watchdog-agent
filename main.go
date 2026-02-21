@@ -174,6 +174,8 @@ func (a *Agent) handleMessage(msg *protocol.Message) {
 	switch msg.Type {
 	case protocol.MsgTypeTask:
 		a.handleTask(msg)
+	case protocol.MsgTypeTaskCancel:
+		a.handleTaskCancel(msg)
 	case protocol.MsgTypePing:
 		if err := a.conn.SendPong(); err != nil {
 			a.logger.Error("failed to send pong", slog.String("error", err.Error()))
@@ -205,6 +207,22 @@ func (a *Agent) handleTask(msg *protocol.Message) {
 		slog.String("type", payload.Type),
 		slog.String("target", payload.Target),
 	)
+}
+
+func (a *Agent) handleTaskCancel(msg *protocol.Message) {
+	var payload protocol.TaskCancelPayload
+	if err := msg.ParsePayload(&payload); err != nil {
+		a.logger.Error("failed to parse task cancel", slog.String("error", err.Error()))
+		return
+	}
+
+	if existing, ok := a.tasks[payload.MonitorID]; ok {
+		existing.Stop()
+		delete(a.tasks, payload.MonitorID)
+		a.logger.Info("task cancelled",
+			slog.String("monitor_id", payload.MonitorID),
+		)
+	}
 }
 
 func (a *Agent) stopAllTasks() {
