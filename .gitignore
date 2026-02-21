@@ -1,0 +1,24 @@
+# Compiled binaries
+watchdog-agent
+watchdog-agent-bin
+agent-*
+bin/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Planning docs
+CLAUDE.md
