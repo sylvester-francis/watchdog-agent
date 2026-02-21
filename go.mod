@@ -6,3 +6,5 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/sylvester-francis/watchdog-proto v0.1.0
 )
+
+replace github.com/sylvester-francis/watchdog-proto => ../watchdog-proto

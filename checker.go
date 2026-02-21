@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -83,6 +84,8 @@ func (t *Task) runCheck() {
 	var status string
 	var latencyMs int
 	var errMsg string
+	var certExpiryDays *int
+	var certIssuer string
 
 	start := time.Now()
 
@@ -93,6 +96,8 @@ func (t *Task) runCheck() {
 		status, errMsg = t.checkTCP(ctx)
 	case "ping":
 		status, errMsg = t.checkPing(ctx)
+	case "tls":
+		status, errMsg, certExpiryDays, certIssuer = t.checkTLS(ctx)
 	default:
 		status = StatusError
 		errMsg = fmt.Sprintf("unknown check type: %s", t.payload.Type)
@@ -101,7 +106,16 @@ func (t *Task) runCheck() {
 	latencyMs = int(time.Since(start).Milliseconds())
 
 	// Send heartbeat
-	if err := t.conn.SendHeartbeat(t.payload.MonitorID, status, latencyMs, errMsg); err != nil {
+	hb := protocol.HeartbeatPayload{
+		MonitorID:      t.payload.MonitorID,
+		Status:         status,
+		LatencyMs:      latencyMs,
+		ErrorMessage:   errMsg,
+		CertExpiryDays: certExpiryDays,
+		CertIssuer:     certIssuer,
+	}
+	msg := protocol.MustNewMessage(protocol.MsgTypeHeartbeat, hb)
+	if err := t.conn.Send(msg); err != nil {
 		t.logger.Error("failed to send heartbeat",
 			slog.String("monitor_id", t.payload.MonitorID),
 			slog.String("error", err.Error()),
@@ -198,6 +212,51 @@ func (t *Task) checkPing(ctx context.Context) (status, errMsg string) {
 	}
 
 	return StatusDown, "host unreachable"
+}
+
+// checkTLS performs a TLS certificate check.
+func (t *Task) checkTLS(ctx context.Context) (status, errMsg string, certExpiryDays *int, certIssuer string) {
+	target := t.payload.Target
+
+	// Default to port 443 if no port specified
+	if _, _, err := net.SplitHostPort(target); err != nil {
+		target = target + ":443"
+	}
+
+	host, _, _ := net.SplitHostPort(target)
+
+	dialer := &net.Dialer{Timeout: time.Duration(t.payload.Timeout) * time.Second}
+	conn, err := tls.DialWithDialer(dialer, "tcp", target, &tls.Config{
+		ServerName: host,
+	})
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return StatusTimeout, "TLS handshake timed out", nil, ""
+		}
+		return StatusDown, fmt.Sprintf("TLS connection failed: %s", err.Error()), nil, ""
+	}
+	defer conn.Close()
+
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return StatusDown, "no certificates presented", nil, ""
+	}
+
+	leaf := certs[0]
+	daysUntilExpiry := int(time.Until(leaf.NotAfter).Hours() / 24)
+	issuer := leaf.Issuer.CommonName
+
+	certExpiryDays = &daysUntilExpiry
+	certIssuer = issuer
+
+	if daysUntilExpiry < 0 {
+		return StatusDown, fmt.Sprintf("certificate expired %d days ago", -daysUntilExpiry), certExpiryDays, certIssuer
+	}
+	if daysUntilExpiry < 14 {
+		return StatusDown, fmt.Sprintf("certificate expires in %d days", daysUntilExpiry), certExpiryDays, certIssuer
+	}
+
+	return StatusUp, "", certExpiryDays, certIssuer
 }
 
 // Checker provides check functions for different monitor types.
