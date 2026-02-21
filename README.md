@@ -14,7 +14,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Scratch--based-2496ED?logo=docker&logoColor=white)
 ![Binary Size](https://img.shields.io/badge/Image-%3C10MB-brightgreen)
 
-[Installation](#installation) • [Configuration](#configuration) • [Check Types](#check-types) • [Running as a Service](#running-as-a-service)
+[Installation](#installation) · [Configuration](#configuration) · [Check Types](#check-types) · [Running as a Service](#running-as-a-service)
 
 ---
 
@@ -22,38 +22,37 @@
 
 WatchDog Agent is a lightweight Go binary that runs inside your network and performs health checks against internal and external targets. It connects **outbound** to the [WatchDog Hub](https://github.com/sylvester-francis/watchdog) over WebSocket — no inbound firewall rules required.
 
+This is part of the [WatchDog](https://github.com/sylvester-francis/watchdog) monitoring system, the only open-source monitoring tool with native agent-based distributed architecture.
+
 **Key Features:**
 
 - **Zero-Config** — Only needs an API key, all monitoring tasks are pushed from the Hub
-- **Multi-Protocol Checks** — HTTP, TCP, and Ping monitoring out of the box
+- **Multi-Protocol Checks** — HTTP, TCP, Ping, DNS, and TLS certificate monitoring out of the box
 - **Auto-Reconnection** — Automatically reconnects and resumes monitoring on connection loss
 - **Cross-Platform** — Pre-built binaries for Linux, macOS, and Windows (amd64/arm64)
 - **Minimal Footprint** — Scratch-based Docker image under 10 MB, two external dependencies
 
 ## How It Works
 
-```mermaid
-graph TB
-    subgraph Net["Customer Network"]
-        subgraph Agent["watchdog-agent"]
-            HTTP["HTTP Checker"]
-            TCP["TCP Checker"]
-            Ping["Ping Checker"]
-        end
-        T1["Internal API"]
-        T2["Database:5432"]
-        T3["Host"]
-    end
-
-    Hub["WatchDog Hub<br/>(cloud / your server)"]
-
-    HTTP --> T1
-    TCP --> T2
-    Ping --> T3
-    Agent -- "WebSocket<br/>(outbound only, port 443)" --> Hub
 ```
-
-> [View Excalidraw source](docs/diagrams/how-it-works.excalidraw)
+┌───────────────────────────┐
+│     Customer Network      │
+│                           │
+│  ┌───────────────────┐    │
+│  │  watchdog-agent   │    │       ┌──────────────────┐
+│  │  ┌──────┐ ┌─────┐ │    │       │  WatchDog Hub    │
+│  │  │ HTTP │ │ TCP │ │────WebSocket──▶  (your server   │
+│  │  └──┬───┘ └──┬──┘ │    │       │   or cloud)      │
+│  │  ┌──┴───┐ ┌──┴──┐ │    │       └──────────────────┘
+│  │  │ Ping │ │ DNS │ │    │
+│  │  └──────┘ └─────┘ │    │
+│  └────────┬───────────┘    │
+│     ┌─────▼─────┐          │
+│     │ Internal  │          │
+│     │ Services  │          │
+│     └───────────┘          │
+└───────────────────────────┘
+```
 
 1. Agent connects to the Hub via WebSocket and authenticates with an API key
 2. Hub pushes monitoring tasks (targets, intervals, timeouts)
@@ -70,7 +69,7 @@ Downloads the latest release, installs to `/usr/local/bin`, and configures a sys
 ```bash
 curl -sSL https://raw.githubusercontent.com/sylvester-francis/watchdog-agent/main/scripts/install-agent.sh | sudo sh -s -- \
   --api-key YOUR_API_KEY \
-  --hub-url wss://your-hub.example.com/ws/agent
+  --hub-url wss://usewatchdog.dev/ws/agent
 ```
 
 | Option | Description | Default |
@@ -95,7 +94,7 @@ Pre-built binaries are available on the [Releases](https://github.com/sylvester-
 curl -fsSL -o watchdog-agent \
   https://github.com/sylvester-francis/watchdog-agent/releases/latest/download/agent-linux-amd64
 chmod +x watchdog-agent
-./watchdog-agent --api-key YOUR_API_KEY --hub wss://your-hub.example.com/ws/agent
+./watchdog-agent --api-key YOUR_API_KEY --hub wss://usewatchdog.dev/ws/agent
 ```
 
 ### Docker
@@ -105,7 +104,7 @@ docker run -d \
   --name watchdog-agent \
   --restart always \
   ghcr.io/sylvester-francis/watchdog-agent:latest \
-  -hub wss://your-hub.example.com/ws/agent \
+  -hub wss://usewatchdog.dev/ws/agent \
   -api-key YOUR_API_KEY
 ```
 
@@ -169,6 +168,14 @@ TCP-based reachability check (ICMP requires elevated privileges). Tries port 80 
 Target: internal-host.example.com
 ```
 
+### DNS
+
+Performs a DNS lookup on the target hostname. Reports `up` if the lookup succeeds and returns records, `down` if the lookup fails or returns no results.
+
+```
+Target: example.com
+```
+
 ## Authentication
 
 1. Agent opens a WebSocket connection to the Hub
@@ -204,7 +211,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/watchdog-agent -hub "wss://your-hub.example.com/ws/agent" -api-key "YOUR_API_KEY"
+ExecStart=/usr/local/bin/watchdog-agent -hub "wss://usewatchdog.dev/ws/agent" -api-key "YOUR_API_KEY"
 Restart=always
 RestartSec=5
 
@@ -233,7 +240,7 @@ Create `~/Library/LaunchAgents/com.watchdog.agent.plist`:
     <array>
         <string>/usr/local/bin/watchdog-agent</string>
         <string>-hub</string>
-        <string>wss://your-hub.example.com/ws/agent</string>
+        <string>wss://usewatchdog.dev/ws/agent</string>
         <string>-api-key</string>
         <string>YOUR_API_KEY</string>
     </array>
@@ -255,7 +262,7 @@ launchctl load ~/Library/LaunchAgents/com.watchdog.agent.plist
 watchdog-agent/
     main.go              # Entrypoint, agent lifecycle, reconnection loop
     connection.go        # WebSocket connection management, auth handshake
-    checker.go           # HTTP, TCP, and ping check implementations
+    checker.go           # HTTP, TCP, Ping, and DNS check implementations
     Dockerfile           # Multi-stage build (scratch-based, <10 MB)
     scripts/
         build-agent.sh       # Cross-platform release build
@@ -269,7 +276,7 @@ watchdog-agent/
 | [gorilla/websocket](https://github.com/gorilla/websocket) | WebSocket client |
 | [watchdog-proto](https://github.com/sylvester-francis/watchdog-proto) | Shared message protocol |
 
-No other external dependencies. The agent uses only the Go standard library for HTTP, TCP, logging, and signal handling.
+No other external dependencies. The agent uses only the Go standard library for HTTP, TCP, DNS, logging, and signal handling.
 
 ## Related Repositories
 
