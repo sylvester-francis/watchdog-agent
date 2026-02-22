@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -50,9 +52,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	wsURL := normalizeHubURL(*hubURL)
+
 	logger.Info("WatchDog Agent starting",
 		slog.String("version", Version),
-		slog.String("hub_url", *hubURL),
+		slog.String("hub_url", wsURL),
 	)
 
 	// Create context with cancellation
@@ -61,7 +65,7 @@ func main() {
 
 	// Create and start agent
 	agent := NewAgent(AgentConfig{
-		HubURL:  *hubURL,
+		HubURL:  wsURL,
 		APIKey:  key,
 		Version: Version,
 		Logger:  logger,
@@ -94,6 +98,30 @@ func main() {
 	case <-time.After(2 * time.Second):
 		logger.Info("agent stopped gracefully")
 	}
+}
+
+// normalizeHubURL converts user-friendly URLs to the WebSocket endpoint.
+// e.g. "https://usewatchdog.dev" -> "wss://usewatchdog.dev/ws/agent"
+func normalizeHubURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+
+	// Upgrade scheme: https -> wss, http -> ws
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	case "http":
+		u.Scheme = "ws"
+	}
+
+	// Append /ws/agent if not already present
+	if !strings.HasSuffix(u.Path, "/ws/agent") {
+		u.Path = strings.TrimRight(u.Path, "/") + "/ws/agent"
+	}
+
+	return u.String()
 }
 
 // AgentConfig holds agent configuration.
