@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -77,8 +79,8 @@ func NewConnection(url, apiKey, version string, logger *slog.Logger) (*Connectio
 
 // Authenticate performs the authentication handshake.
 func (c *Connection) Authenticate(ctx context.Context) error {
-	// Send auth message
-	authMsg := protocol.NewAuthMessage(c.apiKey, c.version)
+	// Send auth message with fingerprint
+	authMsg := protocol.NewAuthMessageWithFingerprint(c.apiKey, c.version, collectFingerprint())
 	if err := c.writeMessage(authMsg); err != nil {
 		return fmt.Errorf("failed to send auth: %w", err)
 	}
@@ -236,6 +238,17 @@ func (c *Connection) writeMessage(msg *protocol.Message) error {
 		return err
 	}
 	return c.conn.WriteMessage(websocket.TextMessage, data)
+}
+
+// collectFingerprint gathers device identity info for the hub to verify.
+func collectFingerprint() map[string]string {
+	hostname, _ := os.Hostname()
+	return map[string]string{
+		"hostname": hostname,
+		"os":       runtime.GOOS,
+		"arch":     runtime.GOARCH,
+		"go":       runtime.Version(),
+	}
 }
 
 func (c *Connection) readMessage() (*protocol.Message, error) {
