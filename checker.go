@@ -96,6 +96,8 @@ func (t *Task) runCheck() {
 		status, errMsg = t.checkTCP(ctx)
 	case "ping":
 		status, errMsg = t.checkPing(ctx)
+	case "dns":
+		status, errMsg = t.checkDNS(ctx)
 	case "tls":
 		status, errMsg, certExpiryDays, certIssuer = t.checkTLS(ctx)
 	default:
@@ -212,6 +214,22 @@ func (t *Task) checkPing(ctx context.Context) (status, errMsg string) {
 	}
 
 	return StatusDown, "host unreachable"
+}
+
+// checkDNS performs a DNS lookup check.
+func (t *Task) checkDNS(ctx context.Context) (status, errMsg string) {
+	resolver := net.Resolver{}
+	addrs, err := resolver.LookupHost(ctx, t.payload.Target)
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return StatusTimeout, "DNS lookup timed out"
+		}
+		return StatusDown, fmt.Sprintf("DNS lookup failed: %s", err.Error())
+	}
+	if len(addrs) == 0 {
+		return StatusDown, "DNS lookup returned no addresses"
+	}
+	return StatusUp, ""
 }
 
 // checkTLS performs a TLS certificate check.
