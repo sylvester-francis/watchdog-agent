@@ -29,10 +29,10 @@ This is part of the [WatchDog](https://github.com/sylvester-francis/watchdog) mo
 **Key Features:**
 
 - **Zero-Config** — Only needs an API key, all monitoring tasks are pushed from the Hub
-- **Multi-Protocol Checks** — HTTP, TCP, Ping, DNS, and TLS certificate monitoring out of the box
+- **8 Check Types** — HTTP, TCP, Ping, DNS, TLS certificates, Docker containers, Databases (PostgreSQL, MySQL, Redis), and System metrics (CPU, memory, disk)
 - **Auto-Reconnection** — Automatically reconnects and resumes monitoring on connection loss
 - **Cross-Platform** — Pre-built binaries for Linux, macOS, and Windows (amd64/arm64)
-- **Minimal Footprint** — Scratch-based Docker image under 10 MB, two external dependencies
+- **Minimal Footprint** — Scratch-based Docker image, single binary deployment
 
 ## How It Works
 
@@ -45,6 +45,9 @@ graph LR
             Ping
             DNS
             TLS
+            Docker
+            Database
+            System
         end
         Services["Internal Services"]
         agent --> Services
@@ -179,6 +182,35 @@ Performs a DNS lookup on the target hostname. Reports `up` if the lookup succeed
 Target: example.com
 ```
 
+### Docker
+
+Checks if a Docker container is running and healthy via the Docker socket (`/var/run/docker.sock`). Reports `up` if the container is running (and healthy, if a health check is configured), `down` otherwise.
+
+```
+Target: my-container-name
+```
+
+### Database
+
+Connects to a database and runs a ping/health check. Supports PostgreSQL, MySQL, and Redis. The database type is specified via task metadata (`db_type`). Optionally accepts a `connection_string` in metadata, otherwise builds one from the target.
+
+```
+Target: db-host:5432
+Metadata: {"db_type": "postgres"}
+```
+
+Supported `db_type` values: `postgres`, `mysql`, `redis`
+
+### System
+
+Monitors local system metrics against a threshold. Reports `down` if usage exceeds the threshold. Supported metrics: `cpu`, `memory`, `disk`. System metrics are only available on Linux.
+
+```
+Target: cpu:90          (alert if CPU > 90%)
+Target: memory:80       (alert if memory > 80%)
+Target: disk:90:/       (alert if disk usage on / > 90%)
+```
+
 ## Authentication
 
 1. Agent opens a WebSocket connection to the Hub
@@ -265,11 +297,16 @@ launchctl load ~/Library/LaunchAgents/com.watchdog.agent.plist
 watchdog-agent/
     main.go              # Entrypoint, agent lifecycle, reconnection loop
     connection.go        # WebSocket connection management, auth handshake
-    checker.go           # HTTP, TCP, Ping, DNS, and TLS check implementations
-    Dockerfile           # Multi-stage build (scratch-based, <10 MB)
+    checker.go           # All check implementations (HTTP, TCP, Ping, DNS, TLS, Docker, Database, System)
+    system_linux.go      # Linux-specific system metrics (CPU, memory, disk via /proc)
+    system_other.go      # Stub for non-Linux platforms
+    Dockerfile           # Multi-stage build (scratch-based)
     scripts/
         build-agent.sh       # Cross-platform release build
         install-agent.sh     # One-liner installer with systemd setup
+    .github/workflows/
+        ci.yml               # CI pipeline
+        release.yml          # Release automation
 ```
 
 ## Dependencies
@@ -278,8 +315,10 @@ watchdog-agent/
 |---------|---------|
 | [gorilla/websocket](https://github.com/gorilla/websocket) | WebSocket client |
 | [watchdog-proto](https://github.com/sylvester-francis/watchdog-proto) | Shared message protocol |
+| [jackc/pgx](https://github.com/jackc/pgx) | PostgreSQL database checks |
+| [go-sql-driver/mysql](https://github.com/go-sql-driver/mysql) | MySQL database checks |
 
-No other external dependencies. The agent uses only the Go standard library for HTTP, TCP, DNS, logging, and signal handling.
+All other checks (HTTP, TCP, DNS, TLS, Docker, System) use only the Go standard library.
 
 ## Related Repositories
 
