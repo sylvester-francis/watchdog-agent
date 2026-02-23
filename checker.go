@@ -117,7 +117,13 @@ func (t *Task) runCheck() {
 		errMsg = fmt.Sprintf("unknown check type: %s", t.payload.Type)
 	}
 
-	latencyMs = int(time.Since(start).Milliseconds())
+	// Only report latency for network-based checks
+	switch t.payload.Type {
+	case "system", "docker":
+		latencyMs = 0
+	default:
+		latencyMs = int(time.Since(start).Milliseconds())
+	}
 
 	// Send heartbeat
 	hb := protocol.HeartbeatPayload{
