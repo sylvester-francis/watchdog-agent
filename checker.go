@@ -112,6 +112,8 @@ func (t *Task) runCheck() {
 		status, errMsg = t.checkDatabase(ctx)
 	case "system":
 		status, errMsg = t.checkSystem(ctx)
+	case "service":
+		status, errMsg = t.checkService()
 	default:
 		status = StatusError
 		errMsg = fmt.Sprintf("unknown check type: %s", t.payload.Type)
@@ -119,7 +121,7 @@ func (t *Task) runCheck() {
 
 	// Only report latency for network-based checks
 	switch t.payload.Type {
-	case "system", "docker":
+	case "system", "docker", "service":
 		latencyMs = 0
 	default:
 		latencyMs = int(time.Since(start).Milliseconds())
@@ -457,6 +459,16 @@ func (t *Task) checkRedis(ctx context.Context) (status, errMsg string) {
 	}
 
 	return StatusUp, ""
+}
+
+// checkService checks if a named OS service (systemd/Windows) is running.
+// Target is the service name (e.g., "nginx", "postgresql").
+func (t *Task) checkService() (status, errMsg string) {
+	serviceName := t.payload.Target
+	if serviceName == "" {
+		return StatusError, "service name is required as target"
+	}
+	return checkServiceStatus(serviceName)
 }
 
 // checkSystem checks system metrics (CPU/memory/disk) against thresholds.
