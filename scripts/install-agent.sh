@@ -159,7 +159,24 @@ EOF
     systemctl daemon-reload
     systemctl enable watchdog-agent
     systemctl start watchdog-agent
-    echo "Agent started as systemd service (running as $SERVICE_USER)"
+
+    # A-011: Verify the agent actually started successfully.
+    echo "Waiting for agent to start..."
+    sleep 3
+
+    if systemctl is-active --quiet watchdog-agent; then
+        AGENT_PID=$(systemctl show --property=MainPID --value watchdog-agent)
+        echo "Agent started successfully as systemd service (running as $SERVICE_USER, PID $AGENT_PID)"
+    else
+        echo ""
+        echo "WARNING: Agent does not appear to be running!"
+        echo "Recent journal output:"
+        journalctl -u watchdog-agent -n 10 --no-pager 2>/dev/null || true
+        echo ""
+        echo "Check the configuration and logs with:"
+        echo "  systemctl status watchdog-agent"
+        echo "  journalctl -u watchdog-agent -f"
+    fi
 else
     echo ""
     echo "Run manually:"
