@@ -358,7 +358,7 @@ func (t *Task) checkDocker(ctx context.Context) (status, errMsg string) {
 		}
 	}
 
-	return StatusUp, ""
+	return StatusUp, fmt.Sprintf("container %s is running", containerName)
 }
 
 // checkDatabase routes to the appropriate DB check based on metadata["db_type"].
