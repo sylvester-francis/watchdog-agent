@@ -3,7 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"fmt"
 	"io"
@@ -11,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -222,12 +226,13 @@ func (t *Task) runCheck() {
 	var errMsg string
 	var certExpiryDays *int
 	var certIssuer string
+	var certMeta map[string]string
 
 	// A-009: Validate target before dispatching to any checker.
 	if reason := sanitizeTarget(t.payload.Type, t.payload.Target); reason != "" {
 		status = StatusError
 		errMsg = fmt.Sprintf("invalid target: %s", reason)
-		t.sendHeartbeat(status, 0, errMsg, nil, "")
+		t.sendHeartbeat(status, 0, errMsg, nil, "", nil)
 		return
 	}
 
@@ -236,7 +241,7 @@ func (t *Task) runCheck() {
 		if reason := sanitizeConnectionString(connStr); reason != "" {
 			status = StatusError
 			errMsg = fmt.Sprintf("invalid connection_string: %s", reason)
-			t.sendHeartbeat(status, 0, errMsg, nil, "")
+			t.sendHeartbeat(status, 0, errMsg, nil, "", nil)
 			return
 		}
 	}
@@ -253,7 +258,7 @@ func (t *Task) runCheck() {
 	case "dns":
 		status, errMsg = t.checkDNS(ctx)
 	case "tls":
-		status, errMsg, certExpiryDays, certIssuer = t.checkTLS(ctx)
+		status, errMsg, certExpiryDays, certIssuer, certMeta = t.checkTLS(ctx)
 	case "docker":
 		status, errMsg = t.checkDocker(ctx)
 	case "database":
@@ -278,11 +283,11 @@ func (t *Task) runCheck() {
 		}
 	}
 
-	t.sendHeartbeat(status, latencyMs, errMsg, certExpiryDays, certIssuer)
+	t.sendHeartbeat(status, latencyMs, errMsg, certExpiryDays, certIssuer, certMeta)
 }
 
 // sendHeartbeat sends a heartbeat message to the hub and logs the check result.
-func (t *Task) sendHeartbeat(status string, latencyMs int, errMsg string, certExpiryDays *int, certIssuer string) {
+func (t *Task) sendHeartbeat(status string, latencyMs int, errMsg string, certExpiryDays *int, certIssuer string, metadata map[string]string) {
 	hb := protocol.HeartbeatPayload{
 		MonitorID:      t.payload.MonitorID,
 		Status:         status,
@@ -290,6 +295,7 @@ func (t *Task) sendHeartbeat(status string, latencyMs int, errMsg string, certEx
 		ErrorMessage:   errMsg,
 		CertExpiryDays: certExpiryDays,
 		CertIssuer:     certIssuer,
+		Metadata:       metadata,
 	}
 	msg := protocol.MustNewMessage(protocol.MsgTypeHeartbeat, hb)
 	if err := t.conn.Send(msg); err != nil {
@@ -417,8 +423,8 @@ func (t *Task) checkDNS(ctx context.Context) (status, errMsg string) {
 	return StatusUp, ""
 }
 
-// checkTLS performs a TLS certificate check.
-func (t *Task) checkTLS(ctx context.Context) (status, errMsg string, certExpiryDays *int, certIssuer string) {
+// checkTLS performs a TLS certificate check and extracts certificate metadata.
+func (t *Task) checkTLS(ctx context.Context) (status, errMsg string, certExpiryDays *int, certIssuer string, certMeta map[string]string) {
 	target := t.payload.Target
 
 	// Default to port 443 if no port specified
@@ -434,15 +440,15 @@ func (t *Task) checkTLS(ctx context.Context) (status, errMsg string, certExpiryD
 	})
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return StatusTimeout, "TLS handshake timed out", nil, ""
+			return StatusTimeout, "TLS handshake timed out", nil, "", nil
 		}
-		return StatusDown, fmt.Sprintf("TLS connection failed: %s", err.Error()), nil, ""
+		return StatusDown, fmt.Sprintf("TLS connection failed: %s", err.Error()), nil, "", nil
 	}
 	defer conn.Close()
 
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
-		return StatusDown, "no certificates presented", nil, ""
+		return StatusDown, "no certificates presented", nil, "", nil
 	}
 
 	leaf := certs[0]
@@ -452,14 +458,45 @@ func (t *Task) checkTLS(ctx context.Context) (status, errMsg string, certExpiryD
 	certExpiryDays = &daysUntilExpiry
 	certIssuer = issuer
 
-	if daysUntilExpiry < 0 {
-		return StatusDown, fmt.Sprintf("certificate expired %d days ago", -daysUntilExpiry), certExpiryDays, certIssuer
+	// Build extended cert metadata
+	certMeta = make(map[string]string)
+	if len(leaf.DNSNames) > 0 {
+		certMeta["cert_sans"] = strings.Join(leaf.DNSNames, ",")
 	}
-	if daysUntilExpiry < 14 {
-		return StatusDown, fmt.Sprintf("certificate expires in %d days", daysUntilExpiry), certExpiryDays, certIssuer
+	certMeta["cert_algorithm"] = leaf.SignatureAlgorithm.String()
+	certMeta["cert_serial"] = leaf.SerialNumber.String()
+
+	// Extract key size from public key
+	switch pub := leaf.PublicKey.(type) {
+	case *rsa.PublicKey:
+		certMeta["cert_key_size"] = strconv.Itoa(pub.N.BitLen())
+	case *ecdsa.PublicKey:
+		certMeta["cert_key_size"] = strconv.Itoa(pub.Curve.Params().BitSize)
 	}
 
-	return StatusUp, "", certExpiryDays, certIssuer
+	// Verify certificate chain
+	intermediates := x509.NewCertPool()
+	for _, c := range certs[1:] {
+		intermediates.AddCert(c)
+	}
+	_, verifyErr := leaf.Verify(x509.VerifyOptions{
+		Intermediates: intermediates,
+		DNSName:       host,
+	})
+	if verifyErr == nil {
+		certMeta["cert_chain_valid"] = "true"
+	} else {
+		certMeta["cert_chain_valid"] = "false"
+	}
+
+	if daysUntilExpiry < 0 {
+		return StatusDown, fmt.Sprintf("certificate expired %d days ago", -daysUntilExpiry), certExpiryDays, certIssuer, certMeta
+	}
+	if daysUntilExpiry < 14 {
+		return StatusDown, fmt.Sprintf("certificate expires in %d days", daysUntilExpiry), certExpiryDays, certIssuer, certMeta
+	}
+
+	return StatusUp, "", certExpiryDays, certIssuer, certMeta
 }
 
 // validContainerName matches valid Docker container names.
