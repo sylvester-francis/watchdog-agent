@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -278,13 +281,29 @@ func (c *Connection) writeMessage(msg *protocol.Message) error {
 }
 
 // collectFingerprint gathers device identity info for the hub to verify.
+//
+// A-010: Redact sensitive fields to reduce reconnaissance value:
+//   - Go version: only send major.minor (e.g. "go1.25") — the patch version
+//     reveals the exact binary and can be used to target known CVEs.
+//   - Hostname: SHA-256 hash (first 12 hex chars) — lets the hub detect when
+//     the host changes without revealing the actual machine name.
 func collectFingerprint() map[string]string {
+	// Hash hostname: SHA-256, first 12 hex characters.
 	hostname, _ := os.Hostname()
+	h := sha256.Sum256([]byte(hostname))
+	hashedHostname := hex.EncodeToString(h[:])[:12]
+
+	// Truncate Go version to major.minor (e.g. "go1.25.6" -> "go1.25").
+	goVersion := runtime.Version()
+	if parts := strings.SplitN(goVersion, ".", 3); len(parts) >= 3 {
+		goVersion = parts[0] + "." + parts[1]
+	}
+
 	return map[string]string{
-		"hostname": hostname,
+		"hostname": hashedHostname,
 		"os":       runtime.GOOS,
 		"arch":     runtime.GOARCH,
-		"go":       runtime.Version(),
+		"go":       goVersion,
 	}
 }
 
