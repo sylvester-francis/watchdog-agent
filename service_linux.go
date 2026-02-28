@@ -36,7 +36,7 @@ func checkServiceStatus(serviceName string) (status, errMsg string) {
 	err = cmd.Run()
 
 	if err == nil {
-		return StatusUp, ""
+		return StatusUp, fmt.Sprintf("service %s is active (running)", serviceName)
 	}
 
 	// Get the actual status text for the error message
