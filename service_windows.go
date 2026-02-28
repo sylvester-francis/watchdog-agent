@@ -37,7 +37,7 @@ func checkServiceStatus(serviceName string) (status, errMsg string) {
 		if strings.HasPrefix(trimmed, "STATE") {
 			upper := strings.ToUpper(trimmed)
 			if strings.Contains(upper, "RUNNING") {
-				return StatusUp, ""
+				return StatusUp, fmt.Sprintf("service %s is running", serviceName)
 			}
 			if strings.Contains(upper, "STOPPED") {
 				return StatusDown, fmt.Sprintf("service %s is stopped", serviceName)
