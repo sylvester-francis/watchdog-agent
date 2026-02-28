@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,14 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/sylvester-francis/watchdog-proto/protocol"
 )
+
+// credentialPattern matches user:password in connection strings (e.g. ://user:pass@host).
+var credentialPattern = regexp.MustCompile(`://[^:]+:[^@]+@`)
+
+// scrubCredentials removes usernames and passwords from connection strings in error messages.
+func scrubCredentials(msg string) string {
+	return credentialPattern.ReplaceAllString(msg, "://***:***@")
+}
 
 // Check result statuses.
 const (
@@ -307,9 +316,21 @@ func (t *Task) checkTLS(ctx context.Context) (status, errMsg string, certExpiryD
 	return StatusUp, "", certExpiryDays, certIssuer
 }
 
+// validContainerName matches valid Docker container names.
+var validContainerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
 // checkDocker checks if a Docker container is running via the Docker socket.
+// Access is restricted to read-only container inspection (GET /containers/{name}/json).
 func (t *Task) checkDocker(ctx context.Context) (status, errMsg string) {
 	containerName := t.payload.Target
+
+	// Validate container name to prevent path traversal and API abuse
+	if !validContainerName.MatchString(containerName) {
+		return StatusError, "invalid container name: must match [a-zA-Z0-9][a-zA-Z0-9_.-]*"
+	}
+	if len(containerName) > 255 {
+		return StatusError, "container name too long (max 255 characters)"
+	}
 
 	// HTTP client using Unix socket
 	client := &http.Client{
@@ -321,8 +342,9 @@ func (t *Task) checkDocker(ctx context.Context) (status, errMsg string) {
 		},
 	}
 
-	url := "http://localhost/containers/" + containerName + "/json"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	// Only allow the container inspect endpoint (read-only)
+	apiURL := "http://localhost/containers/" + containerName + "/json"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, http.NoBody)
 	if err != nil {
 		return StatusError, fmt.Sprintf("invalid request: %s", err.Error())
 	}
@@ -384,12 +406,12 @@ func (t *Task) checkPostgres(ctx context.Context) (status, errMsg string) {
 
 	db, err := sql.Open("pgx", connStr)
 	if err != nil {
-		return StatusDown, fmt.Sprintf("postgres open: %s", err.Error())
+		return StatusDown, scrubCredentials(fmt.Sprintf("postgres open: %s", err.Error()))
 	}
 	defer db.Close()
 
 	if err := db.PingContext(ctx); err != nil {
-		return StatusDown, fmt.Sprintf("postgres ping: %s", err.Error())
+		return StatusDown, scrubCredentials(fmt.Sprintf("postgres ping: %s", err.Error()))
 	}
 	return StatusUp, ""
 }
@@ -402,12 +424,12 @@ func (t *Task) checkMySQL(ctx context.Context) (status, errMsg string) {
 
 	db, err := sql.Open("mysql", connStr)
 	if err != nil {
-		return StatusDown, fmt.Sprintf("mysql open: %s", err.Error())
+		return StatusDown, scrubCredentials(fmt.Sprintf("mysql open: %s", err.Error()))
 	}
 	defer db.Close()
 
 	if err := db.PingContext(ctx); err != nil {
-		return StatusDown, fmt.Sprintf("mysql ping: %s", err.Error())
+		return StatusDown, scrubCredentials(fmt.Sprintf("mysql ping: %s", err.Error()))
 	}
 	return StatusUp, ""
 }

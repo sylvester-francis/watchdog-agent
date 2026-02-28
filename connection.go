@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"runtime"
 	"sync"
@@ -40,15 +43,48 @@ type Connection struct {
 	closeOnce sync.Once
 	agentID   string
 	agentName string
+	tlsConfig *tls.Config
+}
+
+// BuildTLSConfig creates a TLS configuration for secure WebSocket connections.
+// If caCertPath is non-empty, the CA certificate at that path is added to the
+// root CA pool for custom/self-signed certificate verification.
+func BuildTLSConfig(hubURL, caCertPath string) (*tls.Config, error) {
+	u, err := url.Parse(hubURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hub URL: %w", err)
+	}
+
+	cfg := &tls.Config{
+		InsecureSkipVerify: false,
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         u.Hostname(),
+	}
+
+	if caCertPath != "" {
+		caCert, err := os.ReadFile(caCertPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA cert %s: %w", caCertPath, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA cert from %s", caCertPath)
+		}
+		cfg.RootCAs = pool
+	}
+
+	return cfg, nil
 }
 
 // NewConnection creates a new connection to the hub.
-func NewConnection(url, apiKey, version string, logger *slog.Logger) (*Connection, error) {
+// If tlsCfg is non-nil it is used for wss:// connections.
+func NewConnection(wsURL, apiKey, version string, logger *slog.Logger, tlsCfg *tls.Config) (*Connection, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
+		TLSClientConfig:  tlsCfg,
 	}
 
-	conn, resp, err := dialer.Dial(url, nil)
+	conn, resp, err := dialer.Dial(wsURL, nil)
 	if resp != nil && resp.Body != nil {
 		resp.Body.Close()
 	}
@@ -67,13 +103,14 @@ func NewConnection(url, apiKey, version string, logger *slog.Logger) (*Connectio
 	})
 
 	return &Connection{
-		url:     url,
-		apiKey:  apiKey,
-		version: version,
-		conn:    conn,
-		logger:  logger,
-		sendCh:  make(chan *protocol.Message, 256),
-		closeCh: make(chan struct{}),
+		url:       wsURL,
+		apiKey:    apiKey,
+		version:   version,
+		conn:      conn,
+		logger:    logger,
+		sendCh:    make(chan *protocol.Message, 256),
+		closeCh:   make(chan struct{}),
+		tlsConfig: tlsCfg,
 	}, nil
 }
 
