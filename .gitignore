@@ -20,5 +20,9 @@ bin/
 .DS_Store
 Thumbs.db
 
+# Release build artifacts
+dist/
+watchdog-agent-linux
+
 # Planning docs
 CLAUDE.md
