@@ -273,6 +273,9 @@ func (t *Task) runCheck() {
 		latencyMs = 0
 	default:
 		latencyMs = int(time.Since(start).Milliseconds())
+		if latencyMs == 0 {
+			latencyMs = 1 // sub-millisecond checks report as 1ms
+		}
 	}
 
 	t.sendHeartbeat(status, latencyMs, errMsg, certExpiryDays, certIssuer)
