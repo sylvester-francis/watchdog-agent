@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -26,6 +27,126 @@ var credentialPattern = regexp.MustCompile(`://[^:]+:[^@]+@`)
 // scrubCredentials removes usernames and passwords from connection strings in error messages.
 func scrubCredentials(msg string) string {
 	return credentialPattern.ReplaceAllString(msg, "://***:***@")
+}
+
+// shellMetachars contains patterns that could enable shell injection if a value
+// is ever interpolated into a shell command. We reject these defensively even
+// though the current code does not invoke a shell, to prevent future regressions.
+var shellMetachars = []string{"`", "$(", "|", ";", "&&", "||", ">", "<", "\n", "\r"}
+
+// containsShellMeta returns true if s contains any shell metacharacter sequence.
+func containsShellMeta(s string) bool {
+	for _, mc := range shellMetachars {
+		if strings.Contains(s, mc) {
+			return true
+		}
+	}
+	return false
+}
+
+// validHostnameRe matches valid DNS hostnames: labels of alphanumeric + hyphens, separated by dots.
+var validHostnameRe = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+
+// validIPv4Re matches dotted-quad IPv4 addresses (not full validation, but sufficient to reject metacharacters).
+var validIPv4Re = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
+
+// validHostPortRe matches host:port where host is a hostname or IPv4 and port is numeric.
+var validHostPortRe = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d{1,5}$`)
+
+// validServiceNameRe matches systemd unit names: alphanumeric, hyphens, underscores, dots, @.
+var validServiceNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$`)
+
+// validSystemTargetRe matches system metric targets like "cpu:90", "memory:80", "disk:90:/path".
+var validSystemTargetRe = regexp.MustCompile(`^(cpu|memory):\d+(\.\d+)?$|^disk:\d+(\.\d+)?:/[a-zA-Z0-9/_.-]*$`)
+
+// sanitizeTarget validates the target string for a given check type.
+// Returns an error message if the target is invalid, or empty string if valid.
+// This is a defense-in-depth measure: even though current checkers use safe APIs
+// (net.Dial, http.NewRequest, etc.), we reject dangerous input to prevent future
+// regressions if a code path ever passes targets to exec or string interpolation.
+func sanitizeTarget(checkType, target string) string {
+	if target == "" {
+		return "target is required"
+	}
+	// Cap target length to prevent abuse.
+	if utf8.RuneCountInString(target) > 2048 {
+		return "target too long (max 2048 characters)"
+	}
+	// Universal rejection of shell metacharacters in any target.
+	if containsShellMeta(target) {
+		return "target contains prohibited characters"
+	}
+
+	switch checkType {
+	case "http":
+		// Must be a valid HTTP(S) URL.
+		if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+			return "http target must start with http:// or https://"
+		}
+	case "tcp", "tls":
+		// Must be host:port or just a hostname (tls defaults to :443).
+		if _, _, err := net.SplitHostPort(target); err != nil {
+			// For TLS, bare hostname is OK (port defaults to 443).
+			if checkType == "tls" && validHostnameRe.MatchString(target) {
+				break
+			}
+			if checkType == "tls" && validIPv4Re.MatchString(target) {
+				break
+			}
+			return "tcp/tls target must be host:port format"
+		}
+	case "dns":
+		// Must be a valid hostname — no ports, no paths.
+		if !validHostnameRe.MatchString(target) {
+			return "dns target must be a valid hostname (alphanumeric, dots, hyphens)"
+		}
+	case "ping":
+		// Must be a hostname or IP, optionally with port.
+		if _, _, err := net.SplitHostPort(target); err == nil {
+			break // host:port is fine
+		}
+		if validHostnameRe.MatchString(target) || validIPv4Re.MatchString(target) {
+			break
+		}
+		return "ping target must be a valid hostname or IP address"
+	case "docker":
+		// Already validated by validContainerName regex in checkDocker, but validate here too for defense-in-depth.
+		if !validContainerName.MatchString(target) || len(target) > 255 {
+			return "invalid docker container name"
+		}
+	case "database":
+		// For database, target is typically host:port — validate format.
+		if _, _, err := net.SplitHostPort(target); err != nil {
+			// Bare hostname is also acceptable.
+			if !validHostnameRe.MatchString(target) && !validIPv4Re.MatchString(target) {
+				return "database target must be host:port or a valid hostname"
+			}
+		}
+	case "system":
+		// Must match metric:threshold or disk:threshold:/path format.
+		if !validSystemTargetRe.MatchString(target) {
+			return "system target must be metric:threshold (e.g. cpu:90, disk:90:/)"
+		}
+	case "service":
+		// Must be a valid systemd service name.
+		if !validServiceNameRe.MatchString(target) || len(target) > 255 {
+			return "invalid service name: must match [a-zA-Z0-9][a-zA-Z0-9_.@-]*"
+		}
+	}
+	return ""
+}
+
+// sanitizeConnectionString rejects connection strings that contain shell metacharacters.
+// This is defense-in-depth: connection strings are passed to sql.Open (not a shell),
+// but we reject dangerous patterns to prevent future regressions.
+func sanitizeConnectionString(connStr string) string {
+	if connStr == "" {
+		return ""
+	}
+	if containsShellMeta(connStr) {
+		return "connection string contains prohibited characters (shell metacharacters)"
+	}
+	return ""
 }
 
 // Check result statuses.
@@ -102,6 +223,24 @@ func (t *Task) runCheck() {
 	var certExpiryDays *int
 	var certIssuer string
 
+	// A-009: Validate target before dispatching to any checker.
+	if reason := sanitizeTarget(t.payload.Type, t.payload.Target); reason != "" {
+		status = StatusError
+		errMsg = fmt.Sprintf("invalid target: %s", reason)
+		t.sendHeartbeat(status, 0, errMsg, nil, "")
+		return
+	}
+
+	// A-009: Validate connection string metadata if present.
+	if connStr := t.payload.Metadata["connection_string"]; connStr != "" {
+		if reason := sanitizeConnectionString(connStr); reason != "" {
+			status = StatusError
+			errMsg = fmt.Sprintf("invalid connection_string: %s", reason)
+			t.sendHeartbeat(status, 0, errMsg, nil, "")
+			return
+		}
+	}
+
 	start := time.Now()
 
 	switch t.payload.Type {
@@ -136,7 +275,11 @@ func (t *Task) runCheck() {
 		latencyMs = int(time.Since(start).Milliseconds())
 	}
 
-	// Send heartbeat
+	t.sendHeartbeat(status, latencyMs, errMsg, certExpiryDays, certIssuer)
+}
+
+// sendHeartbeat sends a heartbeat message to the hub and logs the check result.
+func (t *Task) sendHeartbeat(status string, latencyMs int, errMsg string, certExpiryDays *int, certIssuer string) {
 	hb := protocol.HeartbeatPayload{
 		MonitorID:      t.payload.MonitorID,
 		Status:         status,
