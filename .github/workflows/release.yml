@@ -54,6 +54,11 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then ext=".exe"; fi
           go build -ldflags="$LDFLAGS" -o "dist/agent-${{ matrix.goos }}-${{ matrix.goarch }}${ext}" .
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:

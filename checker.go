@@ -329,7 +329,7 @@ func (t *Task) checkHTTP(ctx context.Context) (status, errMsg string) {
 		return StatusError, fmt.Sprintf("invalid URL: %s", err.Error())
 	}
 
-	req.Header.Set("User-Agent", "WatchDog-Agent/1.0")
+	req.Header.Set("User-Agent", BrandUserAgent())
 
 	resp, err := client.Do(req)
 	if err != nil {

@@ -23,6 +23,10 @@ Thumbs.db
 # Release build artifacts
 dist/
 watchdog-agent-linux
+beacon-agent-linux
+*-agent-linux
+*-agent-darwin
+*-agent-windows
 
 # Planning docs
 CLAUDE.md

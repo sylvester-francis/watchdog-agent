@@ -25,14 +25,14 @@ func main() {
 	// Flags
 	hubURL := flag.String("hub", "ws://localhost:8080/ws/agent", "Hub WebSocket URL")
 	apiKey := flag.String("api-key", "", "Agent API key (prefer -api-key-file or env var to avoid process list exposure)")
-	apiKeyFile := flag.String("api-key-file", "", "Path to file containing API key (default: /etc/watchdog-agent/api-key)")
+	apiKeyFile := flag.String("api-key-file", "", "Path to file containing API key (default: "+BrandDefaultKeyFile()+")")
 	caCert := flag.String("ca-cert", "", "Path to custom CA certificate bundle for TLS verification")
 	version := flag.Bool("version", false, "Print version and exit")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()
 
 	if *version {
-		fmt.Printf("WatchDog Agent %s (built %s)\n", Version, BuildTime)
+		fmt.Printf("%s Agent %s (built %s)\n", BrandName, Version, BuildTime)
 		os.Exit(0)
 	}
 
@@ -48,7 +48,7 @@ func main() {
 	// API key resolution order: file > env var > flag
 	key := resolveAPIKey(*apiKey, *apiKeyFile, logger)
 	if key == "" {
-		logger.Error("API key required. Use -api-key-file, WATCHDOG_API_KEY env var, or -api-key flag")
+		logger.Error("API key required. Use -api-key-file, " + BrandEnvAPIKey() + " env var, or -api-key flag")
 		os.Exit(1)
 	}
 
@@ -70,7 +70,7 @@ func main() {
 		}
 	}
 
-	logger.Info("WatchDog Agent starting",
+	logger.Info(BrandName+" Agent starting",
 		slog.String("version", Version),
 		slog.String("hub_url", wsURL),
 	)
@@ -118,7 +118,7 @@ func main() {
 }
 
 // normalizeHubURL converts user-friendly URLs to the WebSocket endpoint.
-// e.g. "https://usewatchdog.dev" -> "wss://usewatchdog.dev/ws/agent"
+// e.g. "https://example.com" -> "wss://example.com/ws/agent"
 func normalizeHubURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -310,20 +310,20 @@ func resolveAPIKey(flagValue, filePath string, logger *slog.Logger) string {
 	}
 
 	// 2. Try default file path
-	const defaultKeyFile = "/etc/watchdog-agent/api-key"
+	defaultKeyFile := BrandDefaultKeyFile()
 	if key, err := readKeyFile(defaultKeyFile); err == nil && key != "" {
 		logger.Debug("loaded API key from default file", slog.String("path", defaultKeyFile))
 		return key
 	}
 
 	// 3. Environment variable
-	if key := os.Getenv("WATCHDOG_API_KEY"); key != "" {
+	if key := os.Getenv(BrandEnvAPIKey()); key != "" {
 		return key
 	}
 
 	// 4. CLI flag (least preferred — visible in process list)
 	if flagValue != "" {
-		logger.Warn("API key passed via CLI flag is visible in process list. Use -api-key-file or WATCHDOG_API_KEY env var instead")
+		logger.Warn("API key passed via CLI flag is visible in process list. Use -api-key-file or " + BrandEnvAPIKey() + " env var instead")
 	}
 	return flagValue
 }
