@@ -6,7 +6,7 @@ require (
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/sylvester-francis/watchdog-proto v0.5.0
+	github.com/sylvester-francis/watchdog-proto v0.7.0
 )
 
 require (

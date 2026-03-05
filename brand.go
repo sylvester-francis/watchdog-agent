@@ -14,6 +14,12 @@ var (
 	BrandName      = "WatchDog"       // Display name (e.g. "WatchDog Agent starting")
 	BrandAgent     = "watchdog-agent" // Binary/service name (e.g. /etc/watchdog-agent/)
 	BrandEnvPrefix = "WATCHDOG"       // Env var prefix (e.g. WATCHDOG_API_KEY)
+
+	// ReleaseSigningPublicKey is the hex-encoded ed25519 public key used to
+	// verify update binary signatures. Override at build time via:
+	//   -ldflags "-X main.ReleaseSigningPublicKey=<hex>"
+	// When set to all zeros (placeholder), signature verification is skipped.
+	ReleaseSigningPublicKey = "0000000000000000000000000000000000000000000000000000000000000000"
 )
 
 // BrandConfigDir returns the default config directory path.
