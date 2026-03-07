@@ -12,6 +12,10 @@ import (
 )
 
 const (
+	bannerGrabTimeout = 3 * time.Second
+)
+
+const (
 	maxPortsPerScan     = 10000
 	portScanConcurrency = 50
 	portDialTimeout     = 2 * time.Second
@@ -37,10 +41,14 @@ func (t *Task) checkPortScan(ctx context.Context) (status, errMsg string, metada
 		return StatusError, "no ports specified: set 'ports' or 'port_range' in metadata", nil
 	}
 
+	// Check if banner grabbing is enabled (EE feature gate).
+	bannerGrab := t.payload.Metadata["banner_grab"] == "true"
+
 	// Scan ports concurrently with semaphore
 	type portResult struct {
-		port int
-		open bool
+		port   int
+		open   bool
+		detail *PortDetail
 	}
 
 	results := make([]portResult, len(ports))
@@ -57,8 +65,14 @@ func (t *Task) checkPortScan(ctx context.Context) (status, errMsg string, metada
 			addr := net.JoinHostPort(target, strconv.Itoa(p))
 			conn, dialErr := net.DialTimeout("tcp", addr, portDialTimeout)
 			if dialErr == nil {
-				conn.Close()
-				results[idx] = portResult{port: p, open: true}
+				if bannerGrab {
+					detail := grabBanner(conn, p, bannerGrabTimeout)
+					conn.Close()
+					results[idx] = portResult{port: p, open: true, detail: detail}
+				} else {
+					conn.Close()
+					results[idx] = portResult{port: p, open: true}
+				}
 			} else {
 				results[idx] = portResult{port: p, open: false}
 			}
@@ -68,9 +82,13 @@ func (t *Task) checkPortScan(ctx context.Context) (status, errMsg string, metada
 
 	// Collect results
 	var openPorts, closedPorts []int
+	var portDetails []PortDetail
 	for _, r := range results {
 		if r.open {
 			openPorts = append(openPorts, r.port)
+			if r.detail != nil {
+				portDetails = append(portDetails, *r.detail)
+			}
 		} else {
 			closedPorts = append(closedPorts, r.port)
 		}
@@ -83,6 +101,13 @@ func (t *Task) checkPortScan(ctx context.Context) (status, errMsg string, metada
 		"closed_ports":  intSliceToCSV(closedPorts),
 		"open_count":    strconv.Itoa(len(openPorts)),
 		"scanned_count": strconv.Itoa(len(ports)),
+	}
+
+	// Encode port details for EE consumption (backward-compatible — CE ignores this key).
+	if bannerGrab && len(portDetails) > 0 {
+		if encoded := encodePortDetails(portDetails); encoded != "" {
+			metadata["port_details"] = encoded
+		}
 	}
 
 	// Change-detection alerting against expected_open
