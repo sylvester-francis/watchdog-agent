@@ -136,6 +136,12 @@ func sanitizeTarget(checkType, target string) string {
 		if !validServiceNameRe.MatchString(target) || len(target) > 255 {
 			return "invalid service name: must match [a-zA-Z0-9][a-zA-Z0-9_.@-]*"
 		}
+	case "port_scan":
+		// Must be a hostname or IP (no port suffix).
+		if validHostnameRe.MatchString(target) || validIPv4Re.MatchString(target) {
+			break
+		}
+		return "port_scan target must be a valid hostname or IP address"
 	}
 	return ""
 }
@@ -267,6 +273,8 @@ func (t *Task) runCheck() {
 		status, errMsg = t.checkSystem(ctx)
 	case "service":
 		status, errMsg = t.checkService()
+	case "port_scan":
+		status, errMsg, certMeta = t.checkPortScan(ctx)
 	default:
 		status = StatusError
 		errMsg = fmt.Sprintf("unknown check type: %s", t.payload.Type)
@@ -274,7 +282,7 @@ func (t *Task) runCheck() {
 
 	// Only report latency for network-based checks
 	switch t.payload.Type {
-	case "system", "docker", "service":
+	case "system", "docker", "service", "port_scan":
 		latencyMs = 0
 	default:
 		latencyMs = int(time.Since(start).Milliseconds())
