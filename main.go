@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"os/signal"
@@ -150,10 +152,17 @@ type AgentConfig struct {
 	TLSConfig *tls.Config
 }
 
+// Reconnection backoff constants.
+const (
+	reconnectBase = 1 * time.Second  // initial delay
+	reconnectMax  = 60 * time.Second // cap
+)
+
 // Agent represents the monitoring agent.
 type Agent struct {
-	config AgentConfig
-	conn   *Connection
+	config          AgentConfig
+	conn            *Connection
+	reconnectCount  int
 	tasks  map[string]*Task
 	logger *slog.Logger
 	stopCh chan struct{}
@@ -179,18 +188,20 @@ func (a *Agent) Run(ctx context.Context) error {
 		default:
 			if err := a.connectAndRun(ctx); err != nil {
 				a.logger.Error("connection error", slog.String("error", err.Error()))
+				a.reconnectCount++
 			}
 
 			// Stop all tasks before reconnecting so stale goroutines
 			// don't send heartbeats on the dead connection.
 			a.stopAllTasks()
 
-			// Wait before reconnecting
+			// Wait before reconnecting with exponential backoff + jitter.
+			delay := a.getReconnectDelay()
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(a.getReconnectDelay()):
-				a.logger.Info("reconnecting to hub...")
+			case <-time.After(delay):
+				a.logger.Info("reconnecting to hub...", slog.Duration("backoff", delay))
 			}
 		}
 	}
@@ -211,6 +222,7 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 	}
 
 	a.logger.Info("connected and authenticated")
+	a.reconnectCount = 0 // reset backoff on successful connection
 
 	// Run message loop
 	return conn.Run(ctx, a.handleMessage)
@@ -222,6 +234,8 @@ func (a *Agent) handleMessage(msg *protocol.Message) {
 		a.handleTask(msg)
 	case protocol.MsgTypeTaskCancel:
 		a.handleTaskCancel(msg)
+	case protocol.MsgTypeUpdateAvailable:
+		a.handleUpdateAvailable(msg)
 	case protocol.MsgTypePing:
 		if err := a.conn.SendPong(); err != nil {
 			a.logger.Error("failed to send pong", slog.String("error", err.Error()))
@@ -292,8 +306,15 @@ func (a *Agent) stopAllTasks() {
 }
 
 func (a *Agent) getReconnectDelay() time.Duration {
-	// Simple fixed delay; could implement exponential backoff
-	return 5 * time.Second
+	// Exponential backoff: base * 2^attempt, capped at reconnectMax.
+	exp := math.Pow(2, float64(a.reconnectCount))
+	delay := time.Duration(float64(reconnectBase) * exp)
+	if delay > reconnectMax {
+		delay = reconnectMax
+	}
+	// Add jitter: ±50% of delay to prevent thundering herd.
+	jitter := time.Duration(rand.Int64N(int64(delay)))
+	return delay/2 + jitter
 }
 
 // resolveAPIKey reads the API key using the priority: file > env var > flag.
