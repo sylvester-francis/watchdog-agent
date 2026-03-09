@@ -29,7 +29,7 @@ This is part of the [WatchDog](https://github.com/sylvester-francis/watchdog) mo
 **Key Features:**
 
 - **Zero-Config** — Only needs an API key, all monitoring tasks are pushed from the Hub
-- **8 Check Types** — HTTP, TCP, Ping, DNS, TLS certificates, Docker containers, Databases (PostgreSQL, MySQL, Redis), and System metrics (CPU, memory, disk)
+- **10 Check Types** — HTTP, TCP, Ping, DNS, TLS certificates, Docker containers, Databases (PostgreSQL, MySQL, Redis), System metrics (CPU, memory, disk), Service monitoring (systemd/Windows), and Port Scanning
 - **Auto-Reconnection** — Automatically reconnects and resumes monitoring on connection loss
 - **Cross-Platform** — Pre-built binaries for Linux, macOS, and Windows (amd64/arm64)
 - **Minimal Footprint** — Scratch-based Docker image, single binary deployment
@@ -48,6 +48,8 @@ graph LR
             Docker
             Database
             System
+            Service
+            PortScan["Port Scan"]
         end
         Services["Internal Services"]
         agent --> Services
@@ -211,6 +213,25 @@ Target: memory:80       (alert if memory > 80%)
 Target: disk:90:/       (alert if disk usage on / > 90%)
 ```
 
+### Service
+
+Checks if an OS service is running. Uses `systemctl is-active` on Linux and `sc query` on Windows.
+
+```
+Target: nginx
+Target: postgresql
+```
+
+### Port Scan
+
+Multi-port scanning with optional banner grabbing and service identification. Scans ports concurrently (50 workers, 2s per port timeout, max 10,000 ports per scan). Reports open/closed ports, missing/unexpected ports, and identified services.
+
+```
+Target: internal-host.example.com
+Metadata: {"ports": "80,443,8080", "banner_grab": "true"}
+Metadata: {"port_range": "1-1024", "expected_open": "22,80,443"}
+```
+
 ## Authentication
 
 1. Agent opens a WebSocket connection to the Hub
@@ -298,9 +319,16 @@ watchdog-agent/
     main.go              # Entrypoint, agent lifecycle, reconnection loop
     connection.go        # WebSocket connection management, auth handshake
     checker.go           # All check implementations (HTTP, TCP, Ping, DNS, TLS, Docker, Database, System)
+    port_scan.go         # Port scanning with banner grabbing
+    service_identify.go  # Service detection via banners
+    updater.go           # Binary self-update with signature verification
+    brand.go             # Branding constants (customizable via ldflags)
     system_linux.go      # Linux-specific system metrics (CPU, memory, disk via /proc)
     system_other.go      # Stub for non-Linux platforms
-    Dockerfile           # Multi-stage build (scratch-based)
+    service_linux.go     # systemd service monitoring
+    service_windows.go   # Windows service monitoring
+    service_other.go     # Non-Linux/Windows stub
+    Dockerfile           # Multi-stage build (scratch-based, < 10MB)
     scripts/
         build-agent.sh       # Cross-platform release build
         install-agent.sh     # One-liner installer with systemd setup
@@ -308,6 +336,18 @@ watchdog-agent/
         ci.yml               # CI pipeline
         release.yml          # Release automation
 ```
+
+## Auto-Update
+
+The agent supports binary self-update when the Hub pushes an `update_available` message:
+
+1. Hub sends update notification with version, download URL, SHA-256 checksum, and optional Ed25519 signature
+2. Agent downloads the new binary and verifies the SHA-256 checksum
+3. Validates Ed25519 signature (if update signing key is configured)
+4. Atomically replaces the running binary
+5. Triggers process restart (systemd handles it)
+
+> **Note:** Auto-update is not supported on Windows (cannot replace a running binary).
 
 ## Dependencies
 
