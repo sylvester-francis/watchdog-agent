@@ -283,6 +283,14 @@ func (t *Task) runCheck() {
 		status, errMsg, certMeta = t.checkPortScan(ctx)
 	case "snmp":
 		status, errMsg, certMeta = t.checkSNMP(ctx)
+		// Store SNMP value in error_message for per-heartbeat historical tracking
+		if status == StatusUp && certMeta != nil {
+			if v := certMeta["snmp_value"]; v != "" {
+				errMsg = v
+			} else if cnt := certMeta["snmp_count"]; cnt != "" {
+				errMsg = cnt + " values returned"
+			}
+		}
 	default:
 		status = StatusError
 		errMsg = fmt.Sprintf("unknown check type: %s", t.payload.Type)
