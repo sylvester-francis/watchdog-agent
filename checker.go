@@ -142,6 +142,12 @@ func sanitizeTarget(checkType, target string) string {
 			break
 		}
 		return "port_scan target must be a valid hostname or IP address"
+	case "snmp":
+		// Must be a hostname or IP (SNMP port is configured via metadata).
+		if validHostnameRe.MatchString(target) || validIPv4Re.MatchString(target) {
+			break
+		}
+		return "snmp target must be a valid hostname or IP address"
 	}
 	return ""
 }
@@ -275,6 +281,8 @@ func (t *Task) runCheck() {
 		status, errMsg = t.checkService()
 	case "port_scan":
 		status, errMsg, certMeta = t.checkPortScan(ctx)
+	case "snmp":
+		status, errMsg, certMeta = t.checkSNMP(ctx)
 	default:
 		status = StatusError
 		errMsg = fmt.Sprintf("unknown check type: %s", t.payload.Type)
