@@ -54,8 +54,6 @@ var validHostnameRe = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-
 // validIPv4Re matches dotted-quad IPv4 addresses (not full validation, but sufficient to reject metacharacters).
 var validIPv4Re = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
 
-// validHostPortRe matches host:port where host is a hostname or IPv4 and port is numeric.
-var validHostPortRe = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d{1,5}$`)
 
 // validServiceNameRe matches systemd unit names: alphanumeric, hyphens, underscores, dots, @.
 var validServiceNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$`)
