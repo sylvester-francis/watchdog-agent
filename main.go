@@ -15,6 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/sylvester-francis/watchdog-proto/protocol"
 )
 
@@ -81,6 +84,19 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// OpenTelemetry SDK init. No-op when WATCHDOG_OTEL_ENABLED=false or
+	// when no OTLP traces endpoint is configured. Setting the global
+	// TracerProvider lets any code that calls otel.Tracer("...") from
+	// here on participate in the same provider; the W3C TraceContext
+	// propagator stitches outbound HTTP probes to upstream traces.
+	tracerProvider, telemetryShutdown, err := newTracerProvider(ctx)
+	if err != nil {
+		logger.Error("initialize telemetry", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	otel.SetTracerProvider(tracerProvider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
 	// Create and start agent
 	agent := NewAgent(AgentConfig{
 		HubURL:    wsURL,
@@ -107,6 +123,12 @@ func main() {
 	// Give agent time to clean up
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
+
+	// Flush any batched telemetry before the process exits. Best-effort:
+	// errors are logged but don't block the shutdown sequence.
+	if err := telemetryShutdown(shutdownCtx); err != nil {
+		logger.Warn("telemetry shutdown failed", slog.String("error", err.Error()))
+	}
 
 	cancel() // Cancel the main context
 

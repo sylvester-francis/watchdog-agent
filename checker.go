@@ -22,6 +22,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"github.com/sylvester-francis/watchdog-proto/protocol"
 )
 
@@ -336,8 +337,14 @@ func (t *Task) sendHeartbeat(status string, latencyMs int, errMsg string, certEx
 
 // checkHTTP performs an HTTP check.
 func (t *Task) checkHTTP(ctx context.Context) (status, errMsg string) {
+	// otelhttp.NewTransport wraps the default transport so each probe
+	// becomes an OTel client span when telemetry is enabled. With a no-op
+	// TracerProvider it adds negligible overhead (a single interface dispatch
+	// per request). Trace context is also propagated via W3C headers,
+	// which lets receivers stitch the probe into upstream traces.
 	client := &http.Client{
-		Timeout: time.Duration(t.payload.Timeout) * time.Second,
+		Timeout:   time.Duration(t.payload.Timeout) * time.Second,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
 		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("too many redirects")
