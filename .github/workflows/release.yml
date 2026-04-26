@@ -52,7 +52,10 @@ jobs:
           LDFLAGS="-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}"
           ext=""
           if [ "${{ matrix.goos }}" = "windows" ]; then ext=".exe"; fi
-          go build -ldflags="$LDFLAGS" -o "dist/agent-${{ matrix.goos }}-${{ matrix.goarch }}${ext}" .
+          # -mod=mod bypasses vendor/ so the local proto checkout above
+          # is picked up via the replace directive (vendor/modules.txt
+          # has no marker for the replace, so vendor mode would error).
+          go build -mod=mod -ldflags="$LDFLAGS" -o "dist/agent-${{ matrix.goos }}-${{ matrix.goarch }}${ext}" .
 
       - name: Generate checksums
         run: |
