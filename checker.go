@@ -54,8 +54,6 @@ var validHostnameRe = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-
 // validIPv4Re matches dotted-quad IPv4 addresses (not full validation, but sufficient to reject metacharacters).
 var validIPv4Re = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
 
-// validHostPortRe matches host:port where host is a hostname or IPv4 and port is numeric.
-var validHostPortRe = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d{1,5}$`)
 
 // validServiceNameRe matches systemd unit names: alphanumeric, hyphens, underscores, dots, @.
 var validServiceNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$`)
@@ -753,60 +751,3 @@ func (t *Task) checkSystem(ctx context.Context) (status, errMsg string) {
 	return StatusUp, fmt.Sprintf("%s usage %.1f%%", metric, usage)
 }
 
-// Checker provides check functions for different monitor types.
-type Checker interface {
-	Check(ctx context.Context, target string, timeout time.Duration) (status string, latencyMs int, errMsg string)
-}
-
-// HTTPChecker performs HTTP checks.
-type HTTPChecker struct{}
-
-// Check performs an HTTP GET request.
-func (c *HTTPChecker) Check(ctx context.Context, target string, timeout time.Duration) (status string, latencyMs int, errMsg string) {
-	start := time.Now()
-
-	client := &http.Client{Timeout: timeout}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
-	if err != nil {
-		return StatusError, 0, err.Error()
-	}
-
-	resp, err := client.Do(req)
-	latencyMs = int(time.Since(start).Milliseconds())
-
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return StatusTimeout, latencyMs, "timeout"
-		}
-		return StatusDown, latencyMs, err.Error()
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-		return StatusUp, latencyMs, ""
-	}
-
-	return StatusDown, latencyMs, fmt.Sprintf("HTTP %d", resp.StatusCode)
-}
-
-// TCPChecker performs TCP connection checks.
-type TCPChecker struct{}
-
-// Check performs a TCP connection attempt.
-func (c *TCPChecker) Check(ctx context.Context, target string, timeout time.Duration) (status string, latencyMs int, errMsg string) {
-	start := time.Now()
-
-	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", target)
-	latencyMs = int(time.Since(start).Milliseconds())
-
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return StatusTimeout, latencyMs, "timeout"
-		}
-		return StatusDown, latencyMs, err.Error()
-	}
-	defer conn.Close()
-
-	return StatusUp, latencyMs, ""
-}

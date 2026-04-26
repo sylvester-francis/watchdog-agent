@@ -26,6 +26,10 @@ jobs:
       - name: Configure proto dependency
         run: go mod edit -replace github.com/sylvester-francis/watchdog-proto=./watchdog-proto
 
-      - run: go vet ./...
-      - run: go test -race ./...
-      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /dev/null .
+      # `-mod=mod` bypasses the vendor/ directory so the local proto
+      # checkout above is used instead of the version pinned in vendor/.
+      # Without this, the replace directive added in the previous step
+      # is inconsistent with vendor/modules.txt and `go vet` errors out.
+      - run: go vet -mod=mod ./...
+      - run: go test -mod=mod -race ./...
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=mod -ldflags="-s -w" -o /dev/null .
