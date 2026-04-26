@@ -84,18 +84,41 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// OpenTelemetry SDK init. No-op when WATCHDOG_OTEL_ENABLED=false or
-	// when no OTLP traces endpoint is configured. Setting the global
-	// TracerProvider lets any code that calls otel.Tracer("...") from
-	// here on participate in the same provider; the W3C TraceContext
-	// propagator stitches outbound HTTP probes to upstream traces.
-	tracerProvider, telemetryShutdown, err := newTracerProvider(ctx)
+	// OpenTelemetry SDK init. Both providers no-op when
+	// WATCHDOG_OTEL_ENABLED=false or when no OTLP endpoint is configured.
+	// Setting the global TracerProvider lets any code that calls
+	// otel.Tracer("...") participate in the same provider; the W3C
+	// TraceContext propagator stitches outbound HTTP probes to upstream
+	// traces. The slog tee wraps `logger` BEFORE NewAgent captures it,
+	// so subsystems hold the wrapped handler from the start.
+	tracerProvider, traceShutdown, err := newTracerProvider(ctx)
 	if err != nil {
-		logger.Error("initialize telemetry", slog.String("error", err.Error()))
+		logger.Error("initialize tracer provider", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	otel.SetTracerProvider(tracerProvider)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	loggerProvider, logShutdown, err := newLoggerProvider(ctx)
+	if err != nil {
+		logger.Error("initialize logger provider", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	serviceName := os.Getenv("WATCHDOG_OTEL_SERVICE_NAME")
+	if serviceName == "" {
+		serviceName = "watchdog-agent"
+	}
+	logger = slog.New(newSlogHandler(logger.Handler(), loggerProvider, serviceName))
+	slog.SetDefault(logger)
+
+	telemetryShutdown := func(ctx context.Context) error {
+		traceErr := traceShutdown(ctx)
+		logErr := logShutdown(ctx)
+		if traceErr != nil {
+			return traceErr
+		}
+		return logErr
+	}
 
 	// Create and start agent
 	agent := NewAgent(AgentConfig{
