@@ -35,7 +35,7 @@ github.com/jackc/pgx/v5/stdlib
 ## explicit; go 1.19
 github.com/jackc/puddle/v2
 github.com/jackc/puddle/v2/internal/genstack
-# github.com/sylvester-francis/watchdog-proto v0.7.0
+# github.com/sylvester-francis/watchdog-proto v0.8.0
 ## explicit; go 1.25.6
 github.com/sylvester-francis/watchdog-proto/protocol
 # golang.org/x/sync v0.17.0

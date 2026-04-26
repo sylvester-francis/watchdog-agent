@@ -7,7 +7,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/gosnmp/gosnmp v1.43.2
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/sylvester-francis/watchdog-proto v0.7.0
+	github.com/sylvester-francis/watchdog-proto v0.8.0
 )
 
 require (
