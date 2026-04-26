@@ -239,16 +239,6 @@ func (c *Connection) Send(msg *protocol.Message) error {
 	}
 }
 
-// SendHeartbeat sends a heartbeat message.
-func (c *Connection) SendHeartbeat(monitorID, status string, latencyMs int, errorMsg string) error {
-	msg := protocol.NewHeartbeatMessage(monitorID, status, latencyMs, errorMsg)
-	return c.Send(msg)
-}
-
-// SendPong sends a pong message.
-func (c *Connection) SendPong() error {
-	return c.Send(protocol.NewPongMessage())
-}
 
 // Close closes the connection.
 func (c *Connection) Close() {

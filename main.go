@@ -237,7 +237,7 @@ func (a *Agent) handleMessage(msg *protocol.Message) {
 	case protocol.MsgTypeUpdateAvailable:
 		a.handleUpdateAvailable(msg)
 	case protocol.MsgTypePing:
-		if err := a.conn.SendPong(); err != nil {
+		if err := a.conn.Send(protocol.NewPongMessage()); err != nil {
 			a.logger.Error("failed to send pong", slog.String("error", err.Error()))
 		}
 	default:
