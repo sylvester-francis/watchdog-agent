@@ -23,8 +23,20 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"github.com/sylvester-francis/watchdog-proto/protocol"
 )
+
+// checkTracer issues spans around each monitor check. With a no-op
+// TracerProvider (telemetry disabled) this is effectively free; with
+// a configured exporter every check produces a parent INTERNAL span
+// that both child probe spans (otelhttp CLIENT spans) and slog log
+// records anchor against, so the hub's trace explorer can link logs
+// back to the trace they came from.
+var checkTracer = otel.Tracer("watchdog-agent/checker")
 
 // credentialPattern matches user:password in connection strings (e.g. ://user:pass@host).
 var credentialPattern = regexp.MustCompile(`://[^:]+:[^@]+@`)
@@ -232,6 +244,15 @@ func (t *Task) runCheck() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(t.payload.Timeout)*time.Second)
 	defer cancel()
 
+	ctx, span := checkTracer.Start(ctx, "monitor.check",
+		trace.WithAttributes(
+			attribute.String("monitor.id", t.payload.MonitorID),
+			attribute.String("monitor.type", t.payload.Type),
+			attribute.String("monitor.target", t.payload.Target),
+		),
+	)
+	defer span.End()
+
 	var status string
 	var latencyMs int
 	var errMsg string
@@ -243,7 +264,8 @@ func (t *Task) runCheck() {
 	if reason := sanitizeTarget(t.payload.Type, t.payload.Target); reason != "" {
 		status = StatusError
 		errMsg = fmt.Sprintf("invalid target: %s", reason)
-		t.sendHeartbeat(status, 0, errMsg, nil, "", nil)
+		span.SetStatus(codes.Error, errMsg)
+		t.sendHeartbeat(ctx, status, 0, errMsg, nil, "", nil)
 		return
 	}
 
@@ -252,7 +274,8 @@ func (t *Task) runCheck() {
 		if reason := sanitizeConnectionString(connStr); reason != "" {
 			status = StatusError
 			errMsg = fmt.Sprintf("invalid connection_string: %s", reason)
-			t.sendHeartbeat(status, 0, errMsg, nil, "", nil)
+			span.SetStatus(codes.Error, errMsg)
+			t.sendHeartbeat(ctx, status, 0, errMsg, nil, "", nil)
 			return
 		}
 	}
@@ -306,11 +329,23 @@ func (t *Task) runCheck() {
 		}
 	}
 
-	t.sendHeartbeat(status, latencyMs, errMsg, certExpiryDays, certIssuer, certMeta)
+	if status != StatusUp {
+		span.SetStatus(codes.Error, errMsg)
+	}
+	span.SetAttributes(
+		attribute.String("monitor.status", status),
+		attribute.Int("monitor.latency_ms", latencyMs),
+	)
+
+	t.sendHeartbeat(ctx, status, latencyMs, errMsg, certExpiryDays, certIssuer, certMeta)
 }
 
-// sendHeartbeat sends a heartbeat message to the hub and logs the check result.
-func (t *Task) sendHeartbeat(status string, latencyMs int, errMsg string, certExpiryDays *int, certIssuer string, metadata map[string]string) {
+// sendHeartbeat sends a heartbeat message to the hub and logs the check
+// result. ctx must carry the active monitor.check span so the slog
+// records get the trace_id / span_id automatically attached by the
+// otelslog bridge — that's what wires the hub's "Logs in this trace"
+// pane to the matching trace.
+func (t *Task) sendHeartbeat(ctx context.Context, status string, latencyMs int, errMsg string, certExpiryDays *int, certIssuer string, metadata map[string]string) {
 	hb := protocol.HeartbeatPayload{
 		MonitorID:      t.payload.MonitorID,
 		Status:         status,
@@ -322,13 +357,13 @@ func (t *Task) sendHeartbeat(status string, latencyMs int, errMsg string, certEx
 	}
 	msg := protocol.MustNewMessage(protocol.MsgTypeHeartbeat, hb)
 	if err := t.conn.Send(msg); err != nil {
-		t.logger.Error("failed to send heartbeat",
+		t.logger.ErrorContext(ctx, "failed to send heartbeat",
 			slog.String("monitor_id", t.payload.MonitorID),
 			slog.String("error", err.Error()),
 		)
 	}
 
-	t.logger.Debug("check completed",
+	t.logger.DebugContext(ctx, "check completed",
 		slog.String("monitor_id", t.payload.MonitorID),
 		slog.String("status", status),
 		slog.Int("latency_ms", latencyMs),
