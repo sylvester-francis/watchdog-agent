@@ -30,6 +30,7 @@ This is part of the [WatchDog](https://github.com/sylvester-francis/watchdog) mo
 
 - **Zero-Config** — Only needs an API key, all monitoring tasks are pushed from the Hub
 - **10 Check Types** — HTTP, TCP, Ping, DNS, TLS certificates, Docker containers, Databases (PostgreSQL, MySQL, Redis), System metrics (CPU, memory, disk), Service monitoring (systemd/Windows), and Port Scanning
+- **OpenTelemetry Native** — Each check runs inside a `monitor.check` parent span (with `monitor.id`, `monitor.type`, `monitor.target`, `monitor.status`, `monitor.latency_ms` attributes). HTTP probes nest an `otelhttp` CLIENT child span. Heartbeat logs inherit the trace context automatically — set `OTEL_EXPORTER_OTLP_ENDPOINT` to ship to any collector, including the WatchDog Hub's built-in OTLP receivers.
 - **Auto-Reconnection** — Automatically reconnects and resumes monitoring on connection loss
 - **Cross-Platform** — Pre-built binaries for Linux, macOS, and Windows (amd64/arm64)
 - **Minimal Footprint** — Scratch-based Docker image, single binary deployment
@@ -147,8 +148,29 @@ VERSION=1.0.0 ./scripts/build-agent.sh
 | Variable | Description |
 |----------|-------------|
 | `WATCHDOG_API_KEY` | Agent API key (alternative to `-api-key` flag) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry endpoint, e.g. `http://localhost:4318` (HTTP) or `http://localhost:4317` (gRPC). Unset = no-op (telemetry disabled, zero overhead). |
+| `OTEL_SERVICE_NAME` | Service name on every emitted span and log record (default: `watchdog-agent`). |
+| `OTEL_RESOURCE_ATTRIBUTES` | Comma-separated resource attributes (e.g. `deployment.environment=production,host.name=web-01`). Standard OTel SDK behavior. |
 
 The `-api-key` flag takes precedence over the environment variable.
+
+### OpenTelemetry instrumentation
+
+The agent emits OTel signals when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Without it, the SDK runs in no-op mode and adds zero observable overhead.
+
+Each monitor check is wrapped in an INTERNAL span called `monitor.check` with attributes:
+
+- `monitor.id` — UUID of the monitor
+- `monitor.type` — `http`, `tcp`, `dns`, `tls`, etc.
+- `monitor.target` — the configured target string
+- `monitor.status` — `up`, `down`, `timeout`, etc. (set after the check)
+- `monitor.latency_ms` — measured latency
+
+For HTTP probes, the wrapped `otelhttp` transport produces a child CLIENT span named `HTTP GET`, so the resulting trace is two spans deep: parent `monitor.check` (INTERNAL) → child `HTTP GET` (CLIENT).
+
+Heartbeat log records (`check completed`, `failed to send heartbeat`) inherit the active span's `trace_id` / `span_id` automatically via the `otelslog` bridge — explorers like the WatchDog Hub's `/traces/<id>` page show them under "Logs in this trace" without a manual correlation step.
+
+Failed checks set `span.SetStatus(codes.Error, errMsg)` so explorers' errors-only filters work out of the box.
 
 ## Check Types
 
