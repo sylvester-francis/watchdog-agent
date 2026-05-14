@@ -51,6 +51,7 @@ graph LR
             System
             Service
             PortScan["Port Scan"]
+            SNMP
         end
         Services["Internal Services"]
         agent --> Services
@@ -391,8 +392,11 @@ The agent supports binary self-update when the Hub pushes an `update_available` 
 | [watchdog-proto](https://github.com/sylvester-francis/watchdog-proto) | Shared message protocol |
 | [jackc/pgx](https://github.com/jackc/pgx) | PostgreSQL database checks |
 | [go-sql-driver/mysql](https://github.com/go-sql-driver/mysql) | MySQL database checks |
+| [gosnmp/gosnmp](https://github.com/gosnmp/gosnmp) | SNMP v2c / v3 polling |
+| [redis/go-redis](https://github.com/redis/go-redis) | Redis database checks |
+| OpenTelemetry SDK + `otelhttp` + `otelslog` | Optional trace + log emission when `OTEL_EXPORTER_OTLP_ENDPOINT` is set |
 
-All other checks (HTTP, TCP, DNS, TLS, Docker, System) use only the Go standard library.
+All other check runners (HTTP, TCP, ping, DNS, TLS, Docker, System, Service, Port Scan) use only the Go standard library.
 
 ## Related Repositories
 
