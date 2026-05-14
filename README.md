@@ -29,7 +29,7 @@ This is part of the [WatchDog](https://github.com/sylvester-francis/watchdog) mo
 **Key Features:**
 
 - **Zero-Config** — Only needs an API key, all monitoring tasks are pushed from the Hub
-- **10 Check Types** — HTTP, TCP, Ping, DNS, TLS certificates, Docker containers, Databases (PostgreSQL, MySQL, Redis), System metrics (CPU, memory, disk), Service monitoring (systemd/Windows), and Port Scanning
+- **11 Check Types** — HTTP, TCP, Ping, DNS, TLS certificates, Docker containers, Databases (PostgreSQL, MySQL, Redis), System metrics (CPU, memory, disk), Service monitoring (systemd/Windows), Port Scanning, and SNMP (v2c/v3 GET / Walk / Bulk with templates for Cisco, MikroTik, Ubiquiti, APC, and generic devices)
 - **OpenTelemetry Native** — Each check runs inside a `monitor.check` parent span (with `monitor.id`, `monitor.type`, `monitor.target`, `monitor.status`, `monitor.latency_ms` attributes). HTTP probes nest an `otelhttp` CLIENT child span. Heartbeat logs inherit the trace context automatically — set `OTEL_EXPORTER_OTLP_ENDPOINT` to ship to any collector, including the WatchDog Hub's built-in OTLP receivers.
 - **Auto-Reconnection** — Automatically reconnects and resumes monitoring on connection loss
 - **Cross-Platform** — Pre-built binaries for Linux, macOS, and Windows (amd64/arm64)
@@ -254,6 +254,16 @@ Metadata: {"ports": "80,443,8080", "banner_grab": "true"}
 Metadata: {"port_range": "1-1024", "expected_open": "22,80,443"}
 ```
 
+### SNMP
+
+Polls SNMP-enabled devices (v2c or v3) for OID values. Supports `GET`, `Walk`, and `Bulk` operations. Built-in templates for Cisco IOS, HP ProCurve, MikroTik RouterOS, Ubiquiti UniFi, APC UPS, and a generic catch-all. Each check reports per-OID values plus aggregate health.
+
+```
+Target: switch-01.internal
+Metadata: {"snmp_version": "v2c", "community": "public", "operation": "get", "oids": "1.3.6.1.2.1.1.1.0,1.3.6.1.2.1.1.3.0"}
+Metadata: {"snmp_version": "v3", "username": "monitor", "auth_protocol": "SHA", "auth_password": "...", "priv_protocol": "AES", "priv_password": "...", "template": "cisco_ios"}
+```
+
 ## Authentication
 
 1. Agent opens a WebSocket connection to the Hub
@@ -342,6 +352,8 @@ watchdog-agent/
     connection.go        # WebSocket connection management, auth handshake
     checker.go           # All check implementations (HTTP, TCP, Ping, DNS, TLS, Docker, Database, System)
     port_scan.go         # Port scanning with banner grabbing
+    snmp.go              # SNMP polling (v2c + v3, GET / Walk / Bulk, with device templates)
+    discovery.go         # SNMP-driven network discovery (used by the hub for one-shot scans)
     service_identify.go  # Service detection via banners
     updater.go           # Binary self-update with signature verification
     brand.go             # Branding constants (customizable via ldflags)
