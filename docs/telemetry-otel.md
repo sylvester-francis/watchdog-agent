@@ -28,12 +28,13 @@ Sets the `service.name` resource attribute on every emitted span.
 
 ## What's instrumented
 
-- **HTTP probes** (`checkHTTP`): the probe client is wired with `otelhttp.NewTransport`, so every outbound HTTP check becomes an OTel client span. W3C trace context is propagated via headers — if the target is OTel-instrumented, the probe stitches into the upstream service's trace.
-- **Structured logs**: every `slog` log record (Info, Warn, Error, Debug) is emitted to both stdout (Docker-friendly) AND the OTel logs exporter when an endpoint is configured. The bridge captures structured attributes (`slog.String`, `slog.Int`, etc.) as OTel log attributes.
+- **Per-check parent span**: every check runs inside an INTERNAL span named `monitor.check` with attributes set up-front (`monitor.id`, `monitor.type`, `monitor.target`) and added after execution (`monitor.status` — `up` / `down` / `timeout` / etc., and `monitor.latency_ms`). Failed checks call `span.SetStatus(codes.Error, errMsg)` so errors-only filters in trace explorers work out of the box.
+- **HTTP probes** nest an `otelhttp` CLIENT child span named `HTTP GET` under the parent `monitor.check`. A single HTTP check therefore produces a 2-span trace: parent (INTERNAL `monitor.check`) → child (CLIENT `HTTP GET`). W3C trace context is propagated via headers — if the target is OTel-instrumented, the probe stitches into the upstream service's trace.
+- **Structured logs**: every `slog` log record (Info, Warn, Error, Debug) is emitted to both stdout (Docker-friendly) AND the OTel logs exporter when an endpoint is configured. The `otelslog` bridge captures structured attributes (`slog.String`, `slog.Int`, etc.) as OTel log attributes AND inherits the active span's `trace_id`/`span_id` from `ctx` automatically. Explorers like the WatchDog hub's `/traces/<id>` page show heartbeat logs under "Logs in this trace" without a manual correlation step.
 
 ## What's not instrumented yet (planned)
 
-- TCP, ICMP, DNS, TLS, SNMP, port-scan, service-identify check types
+- Per-runner finer-grained spans inside the agent (TCP, ICMP, DNS, TLS, Docker, Database, System, Service, SNMP, port-scan). The parent `monitor.check` span exists for every check type today; nested child spans inside each runner are still planned.
 - WebSocket connection lifecycle (connect, reconnect, message send/recv)
 
 ## Verifying the pipeline
